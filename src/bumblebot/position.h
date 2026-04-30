@@ -10,20 +10,18 @@
 
 
 struct PositionData{
-    PositionData() : castleRights{}, enPassantTarget{squares::NoneSquare}, 
-    pliesSinceLastCaptureOrPawnMove{0}, plyCount{0}, previous{nullptr} {}
+    PositionData() : castleRights{}, enPassantTarget{squares::NoneSquare},
+    pliesSinceLastCaptureOrPawnMove{0} {}
 
-    PositionData(CastleRights castleRights, Square enPassantTarget, unsigned pliesSinceLastCaptureOrPawnMove, 
-        unsigned plyCount, PositionData* previous)
-    : castleRights{castleRights}, enPassantTarget{enPassantTarget}, 
-    pliesSinceLastCaptureOrPawnMove{pliesSinceLastCaptureOrPawnMove}, plyCount{plyCount}, previous{previous} {}
+    PositionData(CastleRights castleRights, Square enPassantTarget, unsigned pliesSinceLastCaptureOrPawnMove)
+    : castleRights{castleRights}, enPassantTarget{enPassantTarget},
+    pliesSinceLastCaptureOrPawnMove{pliesSinceLastCaptureOrPawnMove} {}
+
+    PositionData(const PositionData& other) = default;
 
     CastleRights castleRights;
     Square enPassantTarget;
     unsigned pliesSinceLastCaptureOrPawnMove;
-    unsigned plyCount;
-
-    PositionData* previous;
 };
 
 
@@ -62,26 +60,30 @@ public:
     bool doubleCheck() const;
 
     void applyMove(Move const& move);
-    void undoMove(Move const& move);
+    void undoMove(Move const& move, PositionData const& previousData);
+
+    void bitboardToggle(PieceType pieceType, Color color, Square square);
 
     Bitboard whitePawns, whiteKnights, whiteBishops, whiteRooks, whiteQueens, whiteKings;
     Bitboard blackPawns, blackKnights, blackBishops, blackRooks, blackQueens, blackKings;
-    
+
     Bitboard whitePieces, blackPieces, allPieces;
 
+    Bitboard opponentAttacks, checkers;
+
+    PositionData positionData;
 private:
     std::array<SquareContent, 64> board;
-    
+
     Color sideToMove;
 
-    PositionData* positionData;
-
-    Bitboard opponentAttacks, checkers;
     Bitboard rookAttacks, bishopAttacks;
 
     std::array<Bitboard, 64> pinnedAvailableSquares;
 
     bool dirtyBitboards, dirtyAttacks, dirtyPins;
+
+    unsigned plyCount;
 };
 
 

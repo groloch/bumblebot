@@ -27,10 +27,13 @@ struct Move {
 struct MoveList {
     MoveList() : moves{}, size{0} {}
 
-    std::array<Move, 256> moves;
+    std::array<Move, 256> moves; 
     unsigned size;
 
-    void append(Move move){
+    void append(Move& move){
+        if(size >= moves.size()){
+            return;
+        }
         moves[size] = move;
         size++;
     }

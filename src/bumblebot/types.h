@@ -36,7 +36,8 @@ enum class PieceType: char {
     Rook = 'r',
     Queen = 'q',
     King = 'k',
-    None = ' '
+    None = ' ',
+    All = '_'
 };
 
 enum class Direction: int{
@@ -187,5 +188,6 @@ constexpr Rank r6 = 5;
 constexpr Rank r7 = 6;
 constexpr Rank r8 = 7;
 }
+
 
 # endif

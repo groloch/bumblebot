@@ -28,10 +28,13 @@ void generatePseudoLegalMoves(Position& position, MoveList& moveList, bool check
     position.updateBitboards();
     position.updateAttackMap();
 
-    for(Square square{squares::a1}; square <= squares::h8; ++square){
-        SquareContent content{position.getSquareContent(square)};
+    Bitboard friendlyPieces{
+        (position.turn() == Color::White) ? position.whitePieces : position.blackPieces
+    };
 
-        if(content.pieceType == PieceType::None || content.color != position.turn()) continue;
+    while(friendlyPieces != 0){
+        Square square{poplsb(friendlyPieces)};
+        SquareContent content{position.getSquareContent(square)};
 
         Bitboard attacks{position.getAttackMap(square, content)};
 
@@ -40,7 +43,6 @@ void generatePseudoLegalMoves(Position& position, MoveList& moveList, bool check
         if(isPawnMove){
             attacks |= generatePawnQuietMoves(position, square, position.turn());
         }
-        Move move;
 
         while(attacks != 0){
             Square to{poplsb(attacks)};
@@ -57,8 +59,8 @@ void generatePseudoLegalMoves(Position& position, MoveList& moveList, bool check
                 for(PieceType promotionPieceType : {
                     PieceType::Queen, PieceType::Rook, PieceType::Bishop, PieceType::Knight
                 }){
-                    move = {
-                        square, to, 
+                    Move move{
+                        square, to,
                         false, false, true, isCapture, true,
                         promotionPieceType, capturedPieceType
                     };
@@ -69,8 +71,8 @@ void generatePseudoLegalMoves(Position& position, MoveList& moveList, bool check
             }
             else{
                 // normal move
-                move = {
-                    square, to, 
+                Move move{
+                    square, to,
                     false, false, false, isCapture, isPawnMove,
                     PieceType::None, capturedPieceType
                 };
@@ -85,13 +87,13 @@ void generatePseudoLegalMoves(Position& position, MoveList& moveList, bool check
             if(position.turn() == Color::White){
                 possible_to |= shift<Direction::NorthEast>(bitboard_of(square));
                 possible_to |= shift<Direction::NorthWest>(bitboard_of(square));
-            }else if(position.turn() == Color::Black){ 
+            }else if(position.turn() == Color::Black){
                 possible_to |= shift<Direction::SouthEast>(bitboard_of(square));
                 possible_to |= shift<Direction::SouthWest>(bitboard_of(square));
             }
 
             if(possible_to & bitboard_of(position.enPassant())){
-                move = {
+                Move move{
                     square, position.enPassant(), true, false, false, true, true, PieceType::None, PieceType::Pawn
                 };
                 if(!checkLegal || position.isLegal(move)){
@@ -113,18 +115,18 @@ void generatePseudoLegalMoves(Position& position, MoveList& moveList, bool check
                 kingsideTo = squares::g8;
                 queensideTo = squares::c8;
             }
-            if(position.canCastle(position.turn(), CastleDirection::Kingside) 
+            if(position.canCastle(position.turn(), CastleDirection::Kingside)
                 && !(position.allPieces & kingsideLookup)){
-                move = {
+                Move move{
                     square, kingsideTo, false, true, false, false, false
                 };
                 if(!checkLegal || position.isLegal(move)){
                     moveList.append(move);
                 }
             }
-            if(position.canCastle(position.turn(), CastleDirection::Queenside) 
+            if(position.canCastle(position.turn(), CastleDirection::Queenside)
                 && !(position.allPieces & queensideLookup)){
-                move = {
+                Move move{
                     square, queensideTo, false, true, false, false, false
                 };
                 if(!checkLegal || position.isLegal(move)){
@@ -139,16 +141,122 @@ void generateLegalMoves(Position& position, MoveList& moveList){
     generatePseudoLegalMoves(position, moveList, true);
 }
 
+void generateEscapeMoves(Position& position, MoveList& moveList){
+    Bitboard friendlyPieces{0};
+    Bitboard kingBitboard{position.kingBitboard()};
+    Square kingSquare{lsb(kingBitboard)};
+
+    Bitboard blockingMask{0};
+
+    if(position.doubleCheck()){
+        friendlyPieces = kingBitboard;
+        blockingMask = bitboards::full;
+    } else{
+        friendlyPieces = (position.turn() == Color::White) ? position.whitePieces : position.blackPieces;
+
+        Square checkerSquare{lsb(position.checkers)};
+        SquareContent checker{position.getSquareContent(checkerSquare)};
+
+        bool queenRookCheck{checker.pieceType == PieceType::Queen && (
+            rank_of(checkerSquare) == rank_of(kingSquare) || file_of(checkerSquare) == file_of(kingSquare)
+        )};
+        bool queenBishopCheck{checker.pieceType == PieceType::Queen && !queenRookCheck};
+
+        if(queenRookCheck || checker.pieceType == PieceType::Rook){
+            blockingMask |= inBetween<PieceType::Rook>(kingSquare, checkerSquare);
+        } else if(queenBishopCheck || checker.pieceType == PieceType::Bishop){
+            blockingMask |= inBetween<PieceType::Bishop>(kingSquare, checkerSquare);
+        } else{
+            blockingMask |= bitboard_of(checkerSquare);
+        }
+    }
+    while(friendlyPieces != 0){
+        Square square{poplsb(friendlyPieces)};
+        SquareContent content{position.getSquareContent(square)};
+
+        Bitboard attacks{position.getAttackMap(square, content)};
+
+        bool isPawnMove{content.pieceType == PieceType::Pawn};
+        if(isPawnMove){
+            attacks |= generatePawnQuietMoves(position, square, position.turn());
+        }
+
+        if(content.pieceType != PieceType::King){
+            attacks &= blockingMask;
+        }
+
+
+        while(attacks != 0){
+            Square to{poplsb(attacks)};
+
+            bool isCapture{position.getSquareContent(to).pieceType != PieceType::None};
+            PieceType capturedPieceType{position.getSquareContent(to).pieceType};
+
+            if(isPawnMove && rank_of(to) == (position.turn() == Color::White ? ranks::r8 : ranks::r1)){
+                // promotion
+                for(PieceType promotionPieceType : {
+                    PieceType::Queen, PieceType::Rook, PieceType::Bishop, PieceType::Knight
+                }){
+                    Move move{
+                        square, to,
+                        false, false, true, isCapture, true,
+                        promotionPieceType, capturedPieceType
+                    };
+                    if(position.isLegal(move)){
+                        moveList.append(move);
+                    }
+                }
+            }
+            else{
+                // normal move
+                Move move{
+                    square, to,
+                    false, false, false, isCapture, isPawnMove,
+                    PieceType::None, capturedPieceType
+                };
+                if(position.isLegal(move)){
+                    moveList.append(move);
+                }
+            }
+        }
+        if(isPawnMove && position.enPassant() != squares::NoneSquare){
+            Bitboard possible_to{0};
+            if(position.turn() == Color::White){
+                possible_to |= shift<Direction::NorthEast>(bitboard_of(square));
+                possible_to |= shift<Direction::NorthWest>(bitboard_of(square));
+            }else if(position.turn() == Color::Black){
+                possible_to |= shift<Direction::SouthEast>(bitboard_of(square));
+                possible_to |= shift<Direction::SouthWest>(bitboard_of(square));
+            }
+
+            if(possible_to & bitboard_of(position.enPassant())){
+                Move move{
+                    square, position.enPassant(), true, false, false,
+                    true, true, PieceType::None, PieceType::Pawn
+                };
+                if(position.isLegal(move)){
+                    moveList.append(move);
+                }
+            }
+        }
+    }
+}
+
+template<>
+void generateMoves<MoveType::Escape>(Position& position, MoveList& moveList){
+    generateEscapeMoves(position, moveList);
+}
+
 template<>
 void generateMoves<MoveType::Legal>(Position& position, MoveList& moveList){
-    generateLegalMoves(position, moveList);
+    if(position.inCheck() && false){ // not working yet
+        generateMoves<MoveType::Escape>(position, moveList);
+    } else{
+        generateLegalMoves(position, moveList);
+    }
 }
 
 template<>
 void generateMoves<MoveType::PseudoLegal>(Position& position, MoveList& moveList){
     generatePseudoLegalMoves(position, moveList);
-}
-
-template<>
-void generateMoves<MoveType::Escape>(Position& position, MoveList& moveList){
 }

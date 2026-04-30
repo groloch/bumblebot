@@ -4,7 +4,7 @@
 
 Position::Position() : board{},
 sideToMove{Color::White}, dirtyBitboards{true},
-dirtyAttacks{true}, dirtyPins{true}, positionData{new PositionData()} {
+dirtyAttacks{true}, dirtyPins{true}, positionData{}, plyCount{0} {
 
     setSquareContent(squares::a1, SquareContent(Color::White, PieceType::Rook));
     setSquareContent(squares::b1, SquareContent(Color::White, PieceType::Knight));
@@ -32,22 +32,21 @@ dirtyAttacks{true}, dirtyPins{true}, positionData{new PositionData()} {
         setSquareContent(square, SquareContent(Color::Black, PieceType::Pawn));
     }
 
-    positionData->castleRights.whiteKingside = true;
-    positionData->castleRights.whiteQueenside = true;
-    positionData->castleRights.blackKingside = true;
-    positionData->castleRights.blackQueenside = true;
+    positionData.castleRights.whiteKingside = true;
+    positionData.castleRights.whiteQueenside = true;
+    positionData.castleRights.blackKingside = true;
+    positionData.castleRights.blackQueenside = true;
 
-    positionData->enPassantTarget = squares::NoneSquare;
-    positionData->pliesSinceLastCaptureOrPawnMove = 0;
-    positionData->plyCount = 0;
+    positionData.enPassantTarget = squares::NoneSquare;
+    positionData.pliesSinceLastCaptureOrPawnMove = 0;
 
     updateBitboards();
     updateAttackMap();
     updatePins();
 }
 
-Position::Position(const char* fen) : board{}, sideToMove{Color::White}, dirtyBitboards{true}, 
-dirtyAttacks{true}, dirtyPins{true}, positionData{new PositionData()} {
+Position::Position(const char* fen) : board{}, sideToMove{Color::White}, dirtyBitboards{true},
+dirtyAttacks{true}, dirtyPins{true}, positionData{}, plyCount{0} {
 
     Rank currentRank {7};
     File currentFile {0};
@@ -90,27 +89,27 @@ dirtyAttacks{true}, dirtyPins{true}, positionData{new PositionData()} {
             } else if (c == ' ') {
                 inSideToMove = false;
                 inCastleRights = true;
-                positionData->castleRights.whiteKingside = false;
-                positionData->castleRights.whiteQueenside = false;
-                positionData->castleRights.blackKingside = false;
-                positionData->castleRights.blackQueenside = false;
+                positionData.castleRights.whiteKingside = false;
+                positionData.castleRights.whiteQueenside = false;
+                positionData.castleRights.blackKingside = false;
+                positionData.castleRights.blackQueenside = false;
             } else {
                 // Invalid FEN : side to move
             }
         } else if (inCastleRights) {
             if (c == '-'){
-                positionData->castleRights.whiteKingside = false;
-                positionData->castleRights.whiteQueenside = false;
-                positionData->castleRights.blackKingside = false;
-                positionData->castleRights.blackQueenside = false;
+                positionData.castleRights.whiteKingside = false;
+                positionData.castleRights.whiteQueenside = false;
+                positionData.castleRights.blackKingside = false;
+                positionData.castleRights.blackQueenside = false;
             } else if (c == 'K') {
-                positionData->castleRights.whiteKingside = true;
+                positionData.castleRights.whiteKingside = true;
             } else if (c == 'Q') {
-                positionData->castleRights.whiteQueenside = true;
+                positionData.castleRights.whiteQueenside = true;
             } else if (c == 'k') {
-                positionData->castleRights.blackKingside = true;
+                positionData.castleRights.blackKingside = true;
             } else if (c == 'q') {
-                positionData->castleRights.blackQueenside = true;
+                positionData.castleRights.blackQueenside = true;
             } else if (c == ' ') {
                 inCastleRights = false;
                 inEnPassant = true;
@@ -124,12 +123,12 @@ dirtyAttacks{true}, dirtyPins{true}, positionData{new PositionData()} {
                 c = *fen;
                 if (c >= '1' && c <= '8') {
                     Rank rank = c - '1';
-                    positionData->enPassantTarget = rank * 8 + file;
+                    positionData.enPassantTarget = rank * 8 + file;
                 } else {
                     // Invalid FEN : en passant square
                 }
             } else if (c == '-') {
-                positionData->enPassantTarget = squares::NoneSquare;
+                positionData.enPassantTarget = squares::NoneSquare;
             } else if (c == ' ') {
                 inEnPassant = false;
                 inPliesSinceLastCaptureOrPawnMove = true;
@@ -138,8 +137,8 @@ dirtyAttacks{true}, dirtyPins{true}, positionData{new PositionData()} {
             }
         } else if (inPliesSinceLastCaptureOrPawnMove) {
             if (c >= '0' && c <= '9') {
-                positionData->pliesSinceLastCaptureOrPawnMove = 
-                positionData->pliesSinceLastCaptureOrPawnMove * 10 + (c - '0');
+                positionData.pliesSinceLastCaptureOrPawnMove =
+                positionData.pliesSinceLastCaptureOrPawnMove * 10 + (c - '0');
             } else if (c == ' ') {
                 inPliesSinceLastCaptureOrPawnMove = false;
                 inPlyCount = true;
@@ -148,7 +147,7 @@ dirtyAttacks{true}, dirtyPins{true}, positionData{new PositionData()} {
             }
         } else if (inPlyCount) {
             if (c >= '0' && c <= '9') {
-                positionData->plyCount = positionData->plyCount * 10 + (c - '0');
+                plyCount = plyCount * 10 + (c - '0');
             } else {
                 // Invalid FEN : ply count
             }
@@ -173,7 +172,11 @@ SquareContent Position::getSquareContent(File file, Rank rank) const {
 
 void Position::setSquareContent(Square square, SquareContent content) {
     assert(square < 64, "Invalid index (setSquareContent)");
-    board[square] = content;
+    SquareContent& currentContent = board[square];
+    bitboardToggle(currentContent.pieceType, currentContent.color, square);
+    bitboardToggle(content.pieceType, content.color, square);
+    currentContent.pieceType = content.pieceType;
+    currentContent.color = content.color;
 }
 
 void Position::setSquareContent(File file, Rank rank, SquareContent content) {
@@ -257,11 +260,11 @@ void Position::updateBitboards() {
 
 Bitboard Position::getAttackMap(Square square, SquareContent content, bool ponder) const {
     const Bitboard square_bb{bitboard_of(square)};
-    Bitboard allPiecesButKing{
+    Bitboard allRelevantBlockers{
         allPieces
     };
     if(ponder){
-        allPiecesButKing &= ~kingBitboard();
+        allRelevantBlockers &= ~kingBitboard();
     }
     const Bitboard friendlyPieces{
         (content.color == Color::White) ? whitePieces : blackPieces
@@ -289,14 +292,14 @@ Bitboard Position::getAttackMap(Square square, SquareContent content, bool ponde
             attacks |= shift<Direction::SouthWest>(shift<Direction::West>(square_bb));
             break;
         case PieceType::Bishop:
-            attacks = bishopMagics[square].attacks_bb(allPiecesButKing);
+            attacks = bishopMagics[square].attacks_bb(allRelevantBlockers);
             break;
         case PieceType::Rook:
-            attacks = rookMagics[square].attacks_bb(allPiecesButKing);
+            attacks = rookMagics[square].attacks_bb(allRelevantBlockers);
             break;
         case PieceType::Queen:
-            attacks = rookMagics[square].attacks_bb(allPiecesButKing);
-            attacks |= bishopMagics[square].attacks_bb(allPiecesButKing);
+            attacks = rookMagics[square].attacks_bb(allRelevantBlockers);
+            attacks |= bishopMagics[square].attacks_bb(allRelevantBlockers);
             break;
         case PieceType::King:
             attacks |= shift<Direction::North>(square_bb);
@@ -326,9 +329,13 @@ void Position::updateAttackMap() {
     rookAttacks = 0;
     bishopAttacks = 0;
     checkers = 0;
-    for (Square square = squares::a1; square <= squares::h8; ++square) {
+
+    Bitboard attackers{
+        turn() == Color::White ? blackPieces : whitePieces
+    };
+    while(attackers != 0){
+        Square square{poplsb(attackers)};
         SquareContent content{getSquareContent(square)};
-        if(content.pieceType == PieceType::None || content.color == sideToMove) continue;
 
         Bitboard attackMap{getAttackMap(square, content, true)};
         opponentAttacks |= attackMap;
@@ -410,21 +417,21 @@ Color Position::turn() const{
 }
 
 Square Position::enPassant() const{
-    return positionData->enPassantTarget;
+    return positionData.enPassantTarget;
 }
 
 bool Position::canCastle(Color color, CastleDirection direction) const{
     if(color == Color::White){
         if(direction == CastleDirection::Kingside){
-            return positionData->castleRights.whiteKingside;
+            return positionData.castleRights.whiteKingside;
         } else if (direction == CastleDirection::Queenside){
-            return positionData->castleRights.whiteQueenside;
+            return positionData.castleRights.whiteQueenside;
         }
     } else {
         if(direction == CastleDirection::Kingside){
-            return positionData->castleRights.blackKingside;
+            return positionData.castleRights.blackKingside;
         } else if (direction == CastleDirection::Queenside){
-            return positionData->castleRights.blackQueenside;
+            return positionData.castleRights.blackQueenside;
         }
     }
     return false;
@@ -517,16 +524,6 @@ void Position::applyMove(Move const& move){
     SquareContent fromContent{getSquareContent(move.from)};
     SquareContent toContent{getSquareContent(move.to)};
 
-    PositionData* newData{
-        new PositionData{
-            positionData->castleRights,
-            positionData->enPassantTarget,
-            positionData->pliesSinceLastCaptureOrPawnMove,
-            positionData->plyCount,
-            positionData
-        }
-    };
-
     if(move.isPromotion){
         setSquareContent(move.to, SquareContent{turn(), move.promotionPieceType});
     } else {
@@ -556,31 +553,31 @@ void Position::applyMove(Move const& move){
     }
     if(fromContent.pieceType == PieceType::King){
         if(sideToMove == Color::White){
-            newData->castleRights.whiteKingside = false;
-            newData->castleRights.whiteQueenside = false;
+            positionData.castleRights.whiteKingside = false;
+            positionData.castleRights.whiteQueenside = false;
         } else {
-            newData->castleRights.blackKingside = false;
-            newData->castleRights.blackQueenside = false;
+            positionData.castleRights.blackKingside = false;
+            positionData.castleRights.blackQueenside = false;
         }
     } else if (fromContent.pieceType == PieceType::Rook){
         if(move.from == squares::a1){
-            newData->castleRights.whiteQueenside = false;
+            positionData.castleRights.whiteQueenside = false;
         } else if(move.from == squares::h1){
-            newData->castleRights.whiteKingside = false;
+            positionData.castleRights.whiteKingside = false;
         } else if(move.from == squares::a8){
-            newData->castleRights.blackQueenside = false;
+            positionData.castleRights.blackQueenside = false;
         } else if(move.from == squares::h8){
-            newData->castleRights.blackKingside = false;
+            positionData.castleRights.blackKingside = false;
         }
     } else if(move.isCapture && toContent.pieceType == PieceType::Rook){
         if(move.to == squares::a1){
-            newData->castleRights.whiteQueenside = false;
+            positionData.castleRights.whiteQueenside = false;
         } else if(move.to == squares::h1){
-            newData->castleRights.whiteKingside = false;
+            positionData.castleRights.whiteKingside = false;
         } else if(move.to == squares::a8){
-            newData->castleRights.blackQueenside = false;
+            positionData.castleRights.blackQueenside = false;
         } else if(move.to == squares::h8){
-            newData->castleRights.blackKingside = false;
+            positionData.castleRights.blackKingside = false;
         }
     }
 
@@ -588,43 +585,38 @@ void Position::applyMove(Move const& move){
         Rank fromRank{rank_of(move.from)};
         Rank toRank{rank_of(move.to)};
         if(turn() == Color::White && fromRank == ranks::r2 && toRank == ranks::r4){
-            newData->enPassantTarget = move.from + 8;
+            positionData.enPassantTarget = move.from + 8;
         } else if(turn() == Color::Black && fromRank == ranks::r7 && toRank == ranks::r5){
-            newData->enPassantTarget = move.from - 8;
+            positionData.enPassantTarget = move.from - 8;
         } else {
-            newData->enPassantTarget = squares::NoneSquare;
+            positionData.enPassantTarget = squares::NoneSquare;
         }
     }else{
-        newData->enPassantTarget = squares::NoneSquare;
+        positionData.enPassantTarget = squares::NoneSquare;
     }
 
     if(fromContent.pieceType == PieceType::Pawn || move.isCapture){
-        newData->pliesSinceLastCaptureOrPawnMove = 0;
+        positionData.pliesSinceLastCaptureOrPawnMove = 0;
     } else {
-        ++newData->pliesSinceLastCaptureOrPawnMove;
+        ++positionData.pliesSinceLastCaptureOrPawnMove;
     }
     if(sideToMove == Color::Black){
-        ++newData->plyCount;
+        ++plyCount;
     }
 
-    positionData = newData;
     sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
-    dirtyBitboards = true;
     dirtyAttacks = true;
     dirtyPins = true;
 
-    updateBitboards();
     updateAttackMap();
     updatePins();
 }
 
-void Position::undoMove(Move const& move){
-    assert(positionData->previous != nullptr, "No move to undo");
-    
+void Position::undoMove(Move const& move, PositionData const& previousData){
     SquareContent toContent{getSquareContent(move.to)};
 
     setSquareContent(move.to, SquareContent{});
-    
+
     if(!move.isPromotion){
         setSquareContent(move.from, toContent);
     }else {
@@ -661,16 +653,55 @@ void Position::undoMove(Move const& move){
         });
     }
 
-    PositionData* prev = positionData->previous;
-    delete positionData;
-    positionData = prev;
-
     sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
-    dirtyBitboards = true;
-    dirtyAttacks = true;
+    // dirtyBitboards = true;
+    // dirtyAttacks = true;
     dirtyPins = true;
 
-    updateBitboards();
-    updateAttackMap();
-    updatePins();
+    positionData = previousData;
+
+    // updateBitboards();
+    // updateAttackMap();
+    // updatePins();
+}
+
+
+void Position::bitboardToggle(PieceType pieceType, Color color, Square square){
+    if (pieceType == PieceType::None || color == Color::None || square == squares::NoneSquare) {
+        return;
+    }
+    Bitboard square_bb{bitboard_of(square)};
+
+    if (color == Color::White){
+        if (pieceType == PieceType::Pawn){
+            whitePawns ^= square_bb;
+        } else if (pieceType == PieceType::Knight){
+            whiteKnights ^= square_bb;
+        } else if (pieceType == PieceType::Bishop){
+            whiteBishops ^= square_bb;
+        } else if (pieceType == PieceType::Rook){
+            whiteRooks ^= square_bb;
+        } else if (pieceType == PieceType::Queen){
+            whiteQueens ^= square_bb;
+        } else if (pieceType == PieceType::King){
+            whiteKings ^= square_bb;
+        }
+        whitePieces ^= square_bb;
+    } else if (color == Color::Black){
+        if (pieceType == PieceType::Pawn){
+            blackPawns ^= square_bb;
+        } else if (pieceType == PieceType::Knight){
+            blackKnights ^= square_bb;
+        } else if (pieceType == PieceType::Bishop){
+            blackBishops ^= square_bb;
+        } else if (pieceType == PieceType::Rook){
+            blackRooks ^= square_bb;
+        } else if (pieceType == PieceType::Queen){
+            blackQueens ^= square_bb;
+        } else if (pieceType == PieceType::King){
+            blackKings ^= square_bb;
+        }
+        blackPieces ^= square_bb;
+    }
+    allPieces ^= square_bb;
 }

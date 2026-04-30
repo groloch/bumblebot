@@ -2,10 +2,11 @@
 
 #include "debugging.h"
 #include "move.h"
+
 #include <chrono>
 
 
-u64 perftDriver(Position position, int depth) {
+u64 perftDriver(Position& position, int depth) {
     MoveList moveList{};
     generateMoves<MoveType::Legal>(position, moveList);
 
@@ -16,35 +17,18 @@ u64 perftDriver(Position position, int depth) {
         return moveList.size;
     }
 
-    u64 nodes{0};
-    for (int i = 0; i < moveList.size; ++i) {
-        Position nextPos{position};
-        Move move{moveList.moves[i]};
-        nextPos.applyMove(moveList.moves[i]);
-        u64 newnodes = perftDriver(nextPos, depth - 1);
-        nodes += newnodes;
-    }
-
-    return nodes;
-}
-
-u64 perftDriverWithUndo(Position& position, int depth) {
-    MoveList moveList{};
-    generateMoves<MoveType::Legal>(position, moveList);
-
-    if (depth == 0) {
-        return 1;
-    }
-    if (depth == 1) {
-        return moveList.size;
-    }
+    PositionData currentData{position.positionData};
+    Bitboard currentAttacks{position.opponentAttacks}, currentCheckers{position.checkers};
 
     u64 nodes{0};
     for (int i = 0; i < moveList.size; ++i) {
         position.applyMove(moveList.moves[i]);
-        u64 newnodes = perftDriverWithUndo(position, depth - 1);
+        u64 newnodes = perftDriver(position, depth - 1);
         nodes += newnodes;
-        position.undoMove(moveList.moves[i]);
+        position.undoMove(moveList.moves[i], currentData);
+        position.opponentAttacks = currentAttacks;
+        position.checkers = currentCheckers;
+        position.updatePins();
     }
 
     return nodes;
@@ -62,7 +46,6 @@ perft::PerftResult run_perft(Position& position, int depth){
             Move move{moveList.moves[i]};
             nextPos.applyMove(moveList.moves[i]);
             u64 newnodes = perftDriver(nextPos, depth - 1);
-            // u64 newnodes = perftDriverWithUndo(nextPos, depth - 1);
 
             perft::NodeResult nodeResult{
                 moveUci(move.from, move.to, move.isPromotion ? move.promotionPieceType : PieceType::None),
@@ -115,7 +98,7 @@ void run_perft_tests(){
         {"r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 3, 9467ull},
         {"r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 2, 264ull},
         {"r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 1, 6ull},
-        
+
         // {"r2q1rk1/pP1p2pp/Q4n2/bbp1p3/Np6/1B3NBn/pPPP1PPP/R3K2R b KQ - 0 1", 6, 706045033ull},
         {"r2q1rk1/pP1p2pp/Q4n2/bbp1p3/Np6/1B3NBn/pPPP1PPP/R3K2R b KQ - 0 1", 5, 15833292ull},
         {"r2q1rk1/pP1p2pp/Q4n2/bbp1p3/Np6/1B3NBn/pPPP1PPP/R3K2R b KQ - 0 1", 4, 422333ull},
@@ -139,16 +122,19 @@ void run_perft_tests(){
 
     int passedTests{0};
     int failedTests{0};
+    u64 totalNodes{0};
 
     auto totalStart = std::chrono::high_resolution_clock::now();
 
     for(int i = 0; i < tests.size(); ++i) {
         perft::PerftTest test{tests[i]};
-        
+
         auto start = std::chrono::high_resolution_clock::now();
         perft::PerftResult testResult{run_perft(test.fen, test.depth)};
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> testElapsed = end - start;
+
+        totalNodes += testResult.nodes;
 
         if(testResult.nodes != test.expectedNodes){
             ++failedTests;
@@ -158,11 +144,16 @@ void run_perft_tests(){
             std::cout << "Test " << i << " passed (" << testElapsed.count() << " ms)" << std::endl;
         }
     }
-    
+
     auto totalEnd = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> totalElapsed = totalEnd - totalStart;
-    
+
+    int totalSeconds = static_cast<int>(totalElapsed.count() / 1000);
+    int totalMilliseconds = static_cast<int>(totalElapsed.count()) % 1000;
+
     std::cout << passedTests << " tests passed, " << failedTests << " tests failed. Total time ";
-    std::cout << static_cast<int>(totalElapsed.count() / 1000) << ".";
-    std::cout << static_cast<int>(totalElapsed.count()) % 1000 << " s" << std::endl;
+    std::cout << totalSeconds << ".";
+    std::cout << totalMilliseconds << " s" << std::endl;
+    std::cout << "Total nodes: " << totalNodes << " (";
+    std::cout << (totalNodes / totalSeconds) << " nodes/s)" << std::endl;
 }
