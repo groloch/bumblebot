@@ -9,6 +9,16 @@
 # include "move.h"
 
 
+class Position;
+
+namespace movegen {
+    void generatePseudoLegalAll(Position& position, MoveList& moveList);
+    void generateLegalAll(Position& position, MoveList& moveList);
+}
+
+void comparePositions(Position const& pos1, Position const& pos2);
+
+
 struct PositionData{
     PositionData() : castleRights{}, enPassantTarget{squares::NoneSquare},
     pliesSinceLastCaptureOrPawnMove{0} {}
@@ -22,6 +32,13 @@ struct PositionData{
     CastleRights castleRights;
     Square enPassantTarget;
     unsigned pliesSinceLastCaptureOrPawnMove;
+};
+
+
+struct StateSnapshot{
+    PositionData positionData;
+    Bitboard opponentAttacks;
+    Bitboard checkers;
 };
 
 
@@ -59,10 +76,15 @@ public:
 
     bool doubleCheck() const;
 
-    void applyMove(Move const& move);
-    void undoMove(Move const& move, PositionData const& previousData);
+    const std::array<Bitboard, 64>& pinMasks() const { return pinnedAvailableSquares; }
 
-    void bitboardToggle(PieceType pieceType, Color color, Square square);
+    void applyMove(Move const& move);
+    void undoMove(Move const& move);
+
+private:
+    friend void movegen::generatePseudoLegalAll(Position&, MoveList&);
+    friend void movegen::generateLegalAll(Position&, MoveList&);
+    friend void comparePositions(Position const&, Position const&);
 
     Bitboard whitePawns, whiteKnights, whiteBishops, whiteRooks, whiteQueens, whiteKings;
     Bitboard blackPawns, blackKnights, blackBishops, blackRooks, blackQueens, blackKings;
@@ -72,18 +94,22 @@ public:
     Bitboard opponentAttacks, checkers;
 
     PositionData positionData;
-private:
+
+    Bitboard& pieceBb(Color color, PieceType pieceType);
+
+    inline void movePiece(Color c, PieceType pt, Square from, Square to);
+    inline void placePiece(Color c, PieceType pt, Square sq);
+    inline void removePiece(Color c, PieceType pt, Square sq);
+
     std::array<SquareContent, 64> board;
 
     Color sideToMove;
 
-    Bitboard rookAttacks, bishopAttacks;
-
     std::array<Bitboard, 64> pinnedAvailableSquares;
 
-    bool dirtyBitboards, dirtyAttacks, dirtyPins;
-
     unsigned plyCount;
+
+    std::vector<StateSnapshot> history;
 };
 
 

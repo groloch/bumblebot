@@ -8,6 +8,9 @@
 #include "bitboard.h"
 
 
+#ifdef NDEBUG
+#define assert(condition, message) ((void)0)
+#else
 #define assert(condition, message) \
     do { \
         if (!(condition)) { \
@@ -15,6 +18,7 @@
             std::abort(); \
         } \
     } while (false)
+#endif
 
 
 inline void printBitboard(Bitboard b){

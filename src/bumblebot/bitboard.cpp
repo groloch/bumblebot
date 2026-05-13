@@ -2,7 +2,38 @@
 
 #include <iostream>
 
+std::array<Bitboard, 64> pawnAttacks[2];
+std::array<Bitboard, 64> knightAttacks;
+std::array<Bitboard, 64> kingAttacks;
+
+static void init_leaper_attacks(){
+    for(Square sq{squares::a1}; sq <= squares::h8; ++sq){
+        Bitboard b{bitboard_of(sq)};
+
+        pawnAttacks[0][sq] = shift<Direction::NorthEast>(b) | shift<Direction::NorthWest>(b);
+        pawnAttacks[1][sq] = shift<Direction::SouthEast>(b) | shift<Direction::SouthWest>(b);
+
+        knightAttacks[sq] =
+            shift<Direction::NorthEast>(shift<Direction::North>(b)) |
+            shift<Direction::NorthEast>(shift<Direction::East>(b)) |
+            shift<Direction::NorthWest>(shift<Direction::North>(b)) |
+            shift<Direction::NorthWest>(shift<Direction::West>(b)) |
+            shift<Direction::SouthEast>(shift<Direction::South>(b)) |
+            shift<Direction::SouthEast>(shift<Direction::East>(b)) |
+            shift<Direction::SouthWest>(shift<Direction::South>(b)) |
+            shift<Direction::SouthWest>(shift<Direction::West>(b));
+
+        kingAttacks[sq] =
+            shift<Direction::North>(b) | shift<Direction::South>(b) |
+            shift<Direction::East>(b)  | shift<Direction::West>(b)  |
+            shift<Direction::NorthEast>(b) | shift<Direction::NorthWest>(b) |
+            shift<Direction::SouthEast>(b) | shift<Direction::SouthWest>(b);
+    }
+}
+
 void init_magics(){
+    init_leaper_attacks();
+
     // rook lookup tables
     for (Square square{squares::a1}; square <= squares::h8; ++square){
         File file{file_of(square)};
@@ -87,6 +118,12 @@ void init_magics(){
         }
     }
 }
+
+void init(){
+    init_leaper_attacks();
+    init_magics();
+}
+
 
 template<>
 Bitboard inBetween<PieceType::Rook>(Square from, Square to){

@@ -24,8 +24,7 @@ struct Magic {
     }
 };
 
-
-void init_magics();
+void init();
 
 
 template<PieceType T>
@@ -184,5 +183,10 @@ constexpr Bitboard bitboard_of_rank(Rank rank){
 
 extern std::array<Magic, 64> rookMagics;
 extern std::array<Magic, 64> bishopMagics;
+
+
+extern std::array<Bitboard, 64> pawnAttacks[2];
+extern std::array<Bitboard, 64> knightAttacks;
+extern std::array<Bitboard, 64> kingAttacks;
 
 # endif
