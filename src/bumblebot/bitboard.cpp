@@ -1,4 +1,5 @@
 # include "bitboard.h"
+# include "zobrist.h"
 
 #include <iostream>
 
@@ -32,8 +33,6 @@ static void init_leaper_attacks(){
 }
 
 void init_magics(){
-    init_leaper_attacks();
-
     // rook lookup tables
     for (Square square{squares::a1}; square <= squares::h8; ++square){
         File file{file_of(square)};
@@ -122,6 +121,7 @@ void init_magics(){
 void init(){
     init_leaper_attacks();
     init_magics();
+    init_zobrist();
 }
 
 

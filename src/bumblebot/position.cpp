@@ -1,9 +1,24 @@
 # include "position.h"
+# include "zobrist.h"
 # include "debugging.h"
 
 
+namespace {
+
+inline Hash castleRightsHash(CastleRights const& cr){
+    Hash h{0};
+    if(cr.whiteKingside)  h ^= zobrist::castle[0];
+    if(cr.whiteQueenside) h ^= zobrist::castle[1];
+    if(cr.blackKingside)  h ^= zobrist::castle[2];
+    if(cr.blackQueenside) h ^= zobrist::castle[3];
+    return h;
+}
+
+}
+
+
 Position::Position() : board{},
-sideToMove{Color::White}, positionData{}, plyCount{0} {
+sideToMove{Color::White}, positionData{}, plyCount{0}, zobristHash{0} {
     history.reserve(64);
 
     setSquareContent(squares::a1, SquareContent(Color::White, PieceType::Rook));
@@ -43,10 +58,11 @@ sideToMove{Color::White}, positionData{}, plyCount{0} {
     updateBitboards();
     updateAttackMap();
     updatePins();
+    recomputeZobristHash();
 }
 
 Position::Position(const char* fen) : board{}, sideToMove{Color::White},
-positionData{}, plyCount{0} {
+positionData{}, plyCount{0}, zobristHash{0} {
     history.reserve(64);
 
     Rank currentRank {7};
@@ -160,6 +176,7 @@ positionData{}, plyCount{0} {
     updateBitboards();
     updateAttackMap();
     updatePins();
+    recomputeZobristHash();
 }
 
 SquareContent Position::getSquareContent(Square square) const {
@@ -545,6 +562,7 @@ inline void Position::movePiece(Color c, PieceType pt, Square from, Square to){
     allPieces ^= bb;
     board[from] = SquareContent{};
     board[to] = SquareContent{c, pt};
+    zobristHash ^= zobrist::pieceKey(c, pt, from) ^ zobrist::pieceKey(c, pt, to);
 }
 
 inline void Position::placePiece(Color c, PieceType pt, Square sq){
@@ -554,6 +572,7 @@ inline void Position::placePiece(Color c, PieceType pt, Square sq){
     else                  blackPieces ^= bb;
     allPieces ^= bb;
     board[sq] = SquareContent{c, pt};
+    zobristHash ^= zobrist::pieceKey(c, pt, sq);
 }
 
 inline void Position::removePiece(Color c, PieceType pt, Square sq){
@@ -563,10 +582,31 @@ inline void Position::removePiece(Color c, PieceType pt, Square sq){
     else                  blackPieces ^= bb;
     allPieces ^= bb;
     board[sq] = SquareContent{};
+    zobristHash ^= zobrist::pieceKey(c, pt, sq);
+}
+
+void Position::recomputeZobristHash(){
+    zobristHash = 0;
+    for(Square sq{squares::a1}; sq <= squares::h8; ++sq){
+        SquareContent content{board[sq]};
+        if(content.pieceType != PieceType::None && content.color != Color::None){
+            zobristHash ^= zobrist::pieceKey(content.color, content.pieceType, sq);
+        }
+    }
+    zobristHash ^= castleRightsHash(positionData.castleRights);
+    if(positionData.enPassantTarget != squares::NoneSquare){
+        zobristHash ^= zobrist::enPassantFile[file_of(positionData.enPassantTarget)];
+    }
+    if(sideToMove == Color::Black){
+        zobristHash ^= zobrist::sideToMoveBlack;
+    }
 }
 
 void Position::applyMove(Move const& move){
-    history.push_back({positionData, opponentAttacks, checkers});
+    history.push_back({positionData, opponentAttacks, checkers, zobristHash});
+
+    const CastleRights oldCastleRights{positionData.castleRights};
+    const Square oldEnPassant{positionData.enPassantTarget};
 
     const Square from{move.from()};
     const Square to{move.to()};
@@ -641,6 +681,16 @@ void Position::applyMove(Move const& move){
     }
     if(sideToMove == Color::Black) ++plyCount;
 
+    // Zobrist: castle rights delta, EP file delta, side-to-move flip.
+    zobristHash ^= castleRightsHash(oldCastleRights) ^ castleRightsHash(positionData.castleRights);
+    if(oldEnPassant != squares::NoneSquare){
+        zobristHash ^= zobrist::enPassantFile[file_of(oldEnPassant)];
+    }
+    if(positionData.enPassantTarget != squares::NoneSquare){
+        zobristHash ^= zobrist::enPassantFile[file_of(positionData.enPassantTarget)];
+    }
+    zobristHash ^= zobrist::sideToMoveBlack;
+
     sideToMove = oppColor;
 
     updateAttackMap();
@@ -683,6 +733,7 @@ void Position::undoMove(Move const& move){
     positionData = snapshot.positionData;
     opponentAttacks = snapshot.opponentAttacks;
     checkers = snapshot.checkers;
+    zobristHash = snapshot.zobristHash;
     history.pop_back();
 
     updatePins();

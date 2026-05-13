@@ -4,6 +4,7 @@
 
 using u64 = unsigned long long;
 using Bitboard = u64;
+using Hash = u64;
 
 using Square = unsigned;
 using File = unsigned;

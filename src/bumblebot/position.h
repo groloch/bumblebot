@@ -39,6 +39,7 @@ struct StateSnapshot{
     PositionData positionData;
     Bitboard opponentAttacks;
     Bitboard checkers;
+    Hash zobristHash;
 };
 
 
@@ -76,6 +77,8 @@ public:
 
     bool doubleCheck() const;
 
+    Hash hash() const { return zobristHash; }
+
     const std::array<Bitboard, 64>& pinMasks() const { return pinnedAvailableSquares; }
 
     void applyMove(Move const& move);
@@ -101,6 +104,8 @@ private:
     inline void placePiece(Color c, PieceType pt, Square sq);
     inline void removePiece(Color c, PieceType pt, Square sq);
 
+    void recomputeZobristHash();
+
     std::array<SquareContent, 64> board;
 
     Color sideToMove;
@@ -108,6 +113,8 @@ private:
     std::array<Bitboard, 64> pinnedAvailableSquares;
 
     unsigned plyCount;
+
+    Hash zobristHash;
 
     std::vector<StateSnapshot> history;
 };

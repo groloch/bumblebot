@@ -15,6 +15,7 @@ add_executable(bumblebot
     src/bumblebot/magics.cpp
     src/bumblebot/perft.cpp
     src/bumblebot/uci.cpp
+    src/bumblebot/zobrist.cpp
 )
 
 target_include_directories(bumblebot PRIVATE
