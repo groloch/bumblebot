@@ -69,6 +69,8 @@ public:
 
     Square enPassant() const;
 
+    unsigned halfmoveClock() const { return positionData.pliesSinceLastCaptureOrPawnMove; }
+
     bool canCastle(Color color, CastleDirection direction) const;
 
     bool isLegal(Move const& move) const;

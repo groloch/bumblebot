@@ -191,4 +191,6 @@ constexpr Rank r8 = 7;
 }
 
 
+constexpr float ZERO_VALUE = 0.5f;
+
 # endif
