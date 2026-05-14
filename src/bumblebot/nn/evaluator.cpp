@@ -12,7 +12,6 @@ constexpr char MODEL_PATH[] = "model.onnx";
 constexpr int64_t TOKENS_LEN = 70;
 constexpr int64_t POLICY_LEN = 4288;
 
-// Must match the names emitted by torch.onnx.export on the trainer side.
 constexpr const char* INPUT_NAMES[]  = {"x", "hm", "epsq"};
 constexpr const char* OUTPUT_NAMES[] = {"policy", "value"};
 
@@ -41,12 +40,14 @@ ModelOutput Evaluator::evaluate(ModelInput const& in){
     const int64_t tokensShape[] = {1, TOKENS_LEN};
     const int64_t scalarShape[] = {1};
 
+    Ort::Float16_t hm16{in.hm};
+
     Ort::Value inputs[] = {
         Ort::Value::CreateTensor<int64_t>(memInfo_,
             const_cast<int64_t*>(in.tokens.data()), TOKENS_LEN,
             tokensShape, 2),
-        Ort::Value::CreateTensor<float>(memInfo_,
-            const_cast<float*>(&in.hm), 1,
+        Ort::Value::CreateTensor<Ort::Float16_t>(memInfo_,
+            &hm16, 1,
             scalarShape, 1),
         Ort::Value::CreateTensor<int64_t>(memInfo_,
             const_cast<int64_t*>(&in.epsq), 1,
@@ -58,9 +59,11 @@ ModelOutput Evaluator::evaluate(ModelInput const& in){
                              OUTPUT_NAMES, 2);
 
     ModelOutput out;
-    std::memcpy(out.policy.data(), outs[0].GetTensorData<float>(),
-                POLICY_LEN * sizeof(float));
-    out.value = *outs[1].GetTensorData<float>();
+    const Ort::Float16_t* policyHalf{outs[0].GetTensorData<Ort::Float16_t>()};
+    for(int64_t i{0}; i < POLICY_LEN; ++i){
+        out.policy[i] = static_cast<float>(policyHalf[i]);
+    }
+    out.value = static_cast<float>(*outs[1].GetTensorData<Ort::Float16_t>());
     return out;
 }
 

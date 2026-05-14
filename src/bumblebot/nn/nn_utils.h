@@ -21,6 +21,8 @@ ModelInput encode_board(Position const& pos);
 
 Move moveFromPolicyIndex(unsigned index, Position const& pos);
 
+unsigned policyIndexOf(Move const& move, Position const& pos);
+
 }
 
 

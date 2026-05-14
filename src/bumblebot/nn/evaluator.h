@@ -13,8 +13,6 @@ namespace nn {
 
 struct ModelOutput {
     std::array<float, 4288> policy;
-    // Win probability in [0, 1] from player to move's perspective (sigmoid applied
-    // model-side). Caller flips to side-to-move POV.
     float                   value;
 };
 

@@ -20,6 +20,8 @@ add_executable(bumblebot
     src/bumblebot/zobrist.cpp
     src/bumblebot/nn/evaluator.cpp
     src/bumblebot/nn/nn_utils.cpp
+    src/bumblebot/search/node.cpp
+    src/bumblebot/search/search.cpp
 )
 
 target_include_directories(bumblebot PRIVATE

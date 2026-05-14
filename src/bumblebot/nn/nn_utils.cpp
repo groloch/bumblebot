@@ -54,7 +54,6 @@ ModelInput encode_board(Position const& pos){
 
     in.tokens[64] = CLS_TOKEN_ID;
 
-    // After mirror, "white" rights are the original black's.
     const Color whiteSide{flip ? Color::Black : Color::White};
     const Color blackSide{flip ? Color::White : Color::Black};
 
@@ -149,6 +148,28 @@ Move moveFromPolicyIndex(unsigned index, Position const& pos){
         promotionPieceType,
         capturedPieceType
     };
+}
+
+
+unsigned policyIndexOf(Move const& move, Position const& pos){
+    const bool flip{pos.turn() == Color::Black};
+    const Square from{flip ? mirror(move.from()) : move.from()};
+    const Square to  {flip ? mirror(move.to())   : move.to()};
+
+    if(move.isPromotion() && move.promotionPieceType() != PieceType::Queen){
+        // 4096 + fromFile*24 + toFile*3 + pieceIdx, where 0=R, 1=B, 2=N.
+        const unsigned fromFile{file_of(from)};
+        const unsigned toFile  {file_of(to)};
+        unsigned pieceIdx{0};
+        switch(move.promotionPieceType()){
+            case PieceType::Rook:   pieceIdx = 0; break;
+            case PieceType::Bishop: pieceIdx = 1; break;
+            case PieceType::Knight: pieceIdx = 2; break;
+            default: pieceIdx = 0; break;
+        }
+        return 4096u + fromFile * 24u + toFile * 3u + pieceIdx;
+    }
+    return static_cast<unsigned>(from) * 64u + static_cast<unsigned>(to);
 }
 
 }
