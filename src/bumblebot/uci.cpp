@@ -2,6 +2,7 @@
 
 # include <algorithm>
 # include <atomic>
+# include <cctype>
 # include <cmath>
 # include <iostream>
 # include <mutex>
@@ -20,6 +21,20 @@
 
 
 namespace {
+
+constexpr unsigned kHashDefaultMb = 16;
+constexpr unsigned kHashMinMb     = 1;
+constexpr unsigned kHashMaxMb     = 33554432;
+constexpr unsigned kThreadsMax    = 1;
+
+
+std::string toLower(std::string s){
+    for(char& c : s){
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
 
 PieceType promoFromChar(char c){
     switch(c){
@@ -192,6 +207,46 @@ void spawnSearch(Position& position, Search& search,
 }
 
 
+void handleSetOption(std::istringstream& ss,
+                     Search& search,
+                     unsigned& hashSizeMb,
+                     unsigned& numThreads){
+    std::string token;
+    if(!(ss >> token) || token != "name") return;
+
+    std::string name;
+    std::string value;
+    bool readingValue{false};
+    while(ss >> token){
+        if(!readingValue && token == "value"){
+            readingValue = true;
+            continue;
+        }
+        std::string& target = readingValue ? value : name;
+        if(!target.empty()) target += ' ';
+        target += token;
+    }
+
+    const std::string nameLower{toLower(name)};
+    if(nameLower == "hash"){
+        try{
+            long long mb{std::stoll(value)};
+            if(mb < static_cast<long long>(kHashMinMb)) mb = kHashMinMb;
+            if(mb > static_cast<long long>(kHashMaxMb)) mb = kHashMaxMb;
+            hashSizeMb = static_cast<unsigned>(mb);
+            search.setHashSizeMb(hashSizeMb);
+        } catch(...){}
+    } else if(nameLower == "threads"){
+        try{
+            long long n{std::stoll(value)};
+            if(n < 1) n = 1;
+            if(n > static_cast<long long>(kThreadsMax)) n = kThreadsMax;
+            numThreads = static_cast<unsigned>(n);
+        } catch(...){}
+    }
+}
+
+
 void handleGo(std::istringstream& ss, Position& position, Search& search,
               std::atomic<bool>& stopFlag, std::thread& worker,
               std::mutex& coutMutex){
@@ -224,6 +279,10 @@ void run_uci(){
     std::thread worker;
     std::mutex coutMutex;
 
+    unsigned hashSizeMb{kHashDefaultMb};
+    unsigned numThreads{1};
+    search.setHashSizeMb(hashSizeMb);
+
     std::string line;
     while(std::getline(std::cin, line)){
         std::istringstream ss{line};
@@ -233,15 +292,23 @@ void run_uci(){
         if(command == "uci"){
             std::lock_guard<std::mutex> lk{coutMutex};
             std::cout << "id name bumblebot" << std::endl;
-            std::cout << "id author baptiste" << std::endl;
+            std::cout << "id author groloch" << std::endl;
+            std::cout << "option name Hash type spin default " << kHashDefaultMb
+                      << " min " << kHashMinMb << " max " << kHashMaxMb << std::endl;
+            std::cout << "option name Threads type spin default 1 min 1 max "
+                      << kThreadsMax << std::endl;
             std::cout << "uciok" << std::endl;
         } else if(command == "isready"){
             std::lock_guard<std::mutex> lk{coutMutex};
             std::cout << "readyok" << std::endl;
+        } else if(command == "setoption"){
+            stopAndJoin(stopFlag, worker);
+            handleSetOption(ss, search, hashSizeMb, numThreads);
         } else if(command == "ucinewgame"){
             stopAndJoin(stopFlag, worker);
             position = Position{};
             search   = Search{};
+            search.setHashSizeMb(hashSizeMb);
         } else if(command == "position"){
             stopAndJoin(stopFlag, worker);
             handlePosition(ss, position);

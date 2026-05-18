@@ -3,6 +3,7 @@
 
 # include <array>
 # include <atomic>
+# include <cstddef>
 # include <cstdint>
 # include <functional>
 # include <unordered_map>
@@ -48,10 +49,17 @@ public:
                   std::atomic<bool>& stop,
                   InfoCallback onInfo);
 
+    void setHashSizeMb(unsigned mb){
+        hashBudgetBytes = static_cast<std::size_t>(mb) * 1024ull * 1024ull;
+    }
+
 private:
+    static constexpr std::size_t kBytesPerEntry = sizeof(Hash) + sizeof(EvalEntry);
+
     float expand(Position& position, Node& node);
 
     std::unordered_map<Hash, EvalEntry> evalCache;
+    std::size_t hashBudgetBytes{16ull * 1024 * 1024};
 };
 
 # endif

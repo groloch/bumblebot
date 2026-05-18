@@ -171,6 +171,9 @@ float Search::expand(Position& position, Node& node){
         EvalEntry entry;
         entry.policy = out.policy;
         entry.value  = out.value;
+        if((evalCache.size() + 1) * kBytesPerEntry > hashBudgetBytes){
+            evalCache.clear();
+        }
         it = evalCache.emplace(key, std::move(entry)).first;
     }
     EvalEntry const& eval{it->second};
