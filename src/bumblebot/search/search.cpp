@@ -1,6 +1,8 @@
 # include "search/search.h"
 
 # include <array>
+# include <chrono>
+# include <cstddef>
 # include <utility>
 # include <vector>
 
@@ -11,18 +13,90 @@
 # include "search/node.h"
 
 
-Move Search::search(Position& position, unsigned iterations){
+namespace {
+
+std::vector<Move> extractPV(const Node& root, std::size_t maxLen = 64){
+    std::vector<Move> pv;
+    const Node* node{&root};
+    while(pv.size() < maxLen && !node->children.empty()){
+        const Edge* best{nullptr};
+        for(const Edge& e : node->children){
+            if(best == nullptr || e.child.visitCount > best->child.visitCount){
+                best = &e;
+            }
+        }
+        if(best == nullptr || best->child.visitCount == 0) break;
+        pv.push_back(best->move);
+        node = &best->child;
+    }
+    return pv;
+}
+
+}
+
+
+Search::Result Search::search(Position& position,
+                              const SearchLimits& limits,
+                              std::atomic<bool>& stop,
+                              InfoCallback onInfo){
+    using clock = std::chrono::steady_clock;
+
     Node root{0.0f};
     expand(position, root);
 
     if(root.children.empty()){
-        return Move{};
+        return Result{Move{}, Move{}};
     }
 
     std::vector<Edge*> path;
     path.reserve(128);
 
-    for(unsigned i{0}; i < iterations; ++i){
+    unsigned maxDepth{0};
+    unsigned long long cumDepth{0};
+
+    const auto t0 = clock::now();
+    auto tLastInfo = t0;
+
+    auto elapsedMsAt = [&](clock::time_point tp){
+        return std::chrono::duration_cast<std::chrono::milliseconds>(tp - t0).count();
+    };
+
+    auto avgDepthNow = [&]() -> unsigned {
+        return (root.visitCount == 0)
+            ? 0u
+            : static_cast<unsigned>(cumDepth / root.visitCount);
+    };
+
+    auto buildStats = [&](clock::time_point now){
+        SearchStats s;
+        s.nodes     = root.visitCount;
+        s.avgDepth  = avgDepthNow();
+        s.maxDepth  = maxDepth;
+        s.elapsedMs = elapsedMsAt(now);
+        // Backprop walks all the way up to root, applying one extra flip;
+        // root.qValue ends up stored from the opponent's POV. Flip it back so
+        // rootQ is the win probability for the side to move at the root.
+        s.rootQ     = (root.visitCount == 0) ? ZERO_VALUE : (1.0f - root.qValue);
+        return s;
+    };
+
+    auto shouldStopNow = [&](clock::time_point now){
+        if(stop.load(std::memory_order_relaxed)) return true;
+        if(limits.maxNodes != 0 && root.visitCount >= limits.maxNodes) return true;
+        if(limits.maxDepth != 0 && avgDepthNow() >= limits.maxDepth) return true;
+        if(limits.movetimeMs > 0 && elapsedMsAt(now) >= limits.movetimeMs) return true;
+        return false;
+    };
+
+    while(true){
+        auto now = clock::now();
+        if(shouldStopNow(now)) break;
+        if(onInfo &&
+           std::chrono::duration_cast<std::chrono::milliseconds>(now - tLastInfo).count() >= 1000){
+            onInfo(buildStats(now), extractPV(root));
+            tLastInfo = now;
+        }
+
         path.clear();
         Node* node{&root};
 
@@ -33,6 +107,11 @@ Move Search::search(Position& position, unsigned iterations){
             position.applyMove(edge->move);
             node = &edge->child;
         }
+
+        if(path.size() > maxDepth){
+            maxDepth = static_cast<unsigned>(path.size());
+        }
+        cumDepth += path.size();
 
         float value{expand(position, *node)};
 
@@ -48,13 +127,16 @@ Move Search::search(Position& position, unsigned iterations){
         }
     }
 
-    Edge* best{&root.children[0]};
-    for(Edge& e : root.children){
-        if(e.child.visitCount > best->child.visitCount){
-            best = &e;
-        }
+    std::vector<Move> pv{extractPV(root)};
+
+    if(onInfo){
+        onInfo(buildStats(clock::now()), pv);
     }
-    return best->move;
+
+    Result r;
+    r.best   = pv.empty()       ? Move{} : pv[0];
+    r.ponder = (pv.size() >= 2) ? pv[1] : Move{};
+    return r;
 }
 
 
@@ -72,6 +154,11 @@ float Search::expand(Position& position, Node& node){
         return node.terminalValue;
     }
     if(position.halfmoveClock() >= 100){
+        node.isTerminal = true;
+        node.terminalValue = ZERO_VALUE;
+        return node.terminalValue;
+    }
+    if(position.isRepetition()){
         node.isTerminal = true;
         node.terminalValue = ZERO_VALUE;
         return node.terminalValue;

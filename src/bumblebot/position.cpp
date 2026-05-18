@@ -2,6 +2,8 @@
 # include "zobrist.h"
 # include "debugging.h"
 
+# include <algorithm>
+
 
 namespace {
 
@@ -526,6 +528,16 @@ bool Position::inCheck() const{
 
 bool Position::doubleCheck() const{
     return more_than_one(checkers);
+}
+
+bool Position::isRepetition() const{
+    const std::size_t hmc{positionData.pliesSinceLastCaptureOrPawnMove};
+    const std::size_t n{history.size()};
+    const std::size_t maxBack{std::min(hmc, n)};
+    for(std::size_t back{2}; back <= maxBack; back += 2){
+        if(history[n - back].zobristHash == zobristHash) return true;
+    }
+    return false;
 }
 
 Bitboard& Position::pieceBb(Color color, PieceType pieceType){

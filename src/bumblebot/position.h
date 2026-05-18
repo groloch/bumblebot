@@ -81,6 +81,8 @@ public:
 
     Hash hash() const { return zobristHash; }
 
+    bool isRepetition() const;
+
     const std::array<Bitboard, 64>& pinMasks() const { return pinnedAvailableSquares; }
 
     void applyMove(Move const& move);
