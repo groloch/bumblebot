@@ -1,11 +1,11 @@
 # ifndef MOVE_H
 # define MOVE_H
 
-#include <cstdint>
-#include <type_traits>
+# include <cstdint>
+# include <type_traits>
 
-#include "types.h"
-#include "bitboard.h"
+# include "types.h"
+# include "bitboard.h"
 
 class Position;
 
@@ -19,23 +19,23 @@ struct Move {
         : bits{
             (static_cast<uint32_t>(from) & 0x3Fu) |
             ((static_cast<uint32_t>(to) & 0x3Fu) << 6) |
-            (static_cast<uint32_t>(isCapture)   << 12) |
-            (static_cast<uint32_t>(isCastle)    << 13) |
+            (static_cast<uint32_t>(isCapture) << 12) |
+            (static_cast<uint32_t>(isCastle) << 13) |
             (static_cast<uint32_t>(isPromotion) << 14) |
             (static_cast<uint32_t>(isEnPassant) << 15) |
-            (static_cast<uint32_t>(isPawnMove)  << 16) |
-            (static_cast<uint32_t>(encodePieceType(capturedPieceType))  << 17) |
+            (static_cast<uint32_t>(isPawnMove) << 16) |
+            (static_cast<uint32_t>(encodePieceType(capturedPieceType)) << 17) |
             (static_cast<uint32_t>(encodePieceType(promotionPieceType)) << 20)
           } {}
 
-    constexpr Square from()  const { return  bits        & 0x3Fu; }
-    constexpr Square to()    const { return (bits >> 6)  & 0x3Fu; }
-    constexpr bool isCapture()   const { return ((bits >> 12) & 1u) != 0; }
-    constexpr bool isCastle()    const { return ((bits >> 13) & 1u) != 0; }
+    constexpr Square from() const { return bits & 0x3Fu; }
+    constexpr Square to() const { return (bits >> 6) & 0x3Fu; }
+    constexpr bool isCapture() const { return ((bits >> 12) & 1u) != 0; }
+    constexpr bool isCastle() const { return ((bits >> 13) & 1u) != 0; }
     constexpr bool isPromotion() const { return ((bits >> 14) & 1u) != 0; }
     constexpr bool isEnPassant() const { return ((bits >> 15) & 1u) != 0; }
-    constexpr bool isPawnMove()  const { return ((bits >> 16) & 1u) != 0; }
-    constexpr PieceType capturedPieceType()  const { return decodePieceType((bits >> 17) & 7u); }
+    constexpr bool isPawnMove() const { return ((bits >> 16) & 1u) != 0; }
+    constexpr PieceType capturedPieceType() const { return decodePieceType((bits >> 17) & 7u); }
     constexpr PieceType promotionPieceType() const { return decodePieceType((bits >> 20) & 7u); }
 
     uint32_t bits;

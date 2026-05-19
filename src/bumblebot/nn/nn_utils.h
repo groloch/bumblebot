@@ -13,8 +13,8 @@ namespace nn {
 
 struct ModelInput {
     std::array<int64_t, 70> tokens;
-    float                   hm;
-    int64_t                 epsq;
+    float hm;
+    int64_t epsq;
 };
 
 ModelInput encode_board(Position const& pos);

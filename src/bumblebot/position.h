@@ -20,12 +20,19 @@ void comparePositions(Position const& pos1, Position const& pos2);
 
 
 struct PositionData{
-    PositionData() : castleRights{}, enPassantTarget{squares::NoneSquare},
-    pliesSinceLastCaptureOrPawnMove{0} {}
+    PositionData()
+        : castleRights{},
+          enPassantTarget{squares::NoneSquare},
+          pliesSinceLastCaptureOrPawnMove{0}
+    {}
 
-    PositionData(CastleRights castleRights, Square enPassantTarget, unsigned pliesSinceLastCaptureOrPawnMove)
-    : castleRights{castleRights}, enPassantTarget{enPassantTarget},
-    pliesSinceLastCaptureOrPawnMove{pliesSinceLastCaptureOrPawnMove} {}
+    PositionData(CastleRights castleRights,
+                 Square enPassantTarget,
+                 unsigned pliesSinceLastCaptureOrPawnMove)
+        : castleRights{castleRights},
+          enPassantTarget{enPassantTarget},
+          pliesSinceLastCaptureOrPawnMove{pliesSinceLastCaptureOrPawnMove}
+    {}
 
     PositionData(const PositionData& other) = default;
 

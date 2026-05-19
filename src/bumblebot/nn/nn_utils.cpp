@@ -10,9 +10,9 @@ namespace nn {
 
 namespace {
 
-constexpr int64_t CASTLING_BASE  = 13;
+constexpr int64_t CASTLING_BASE = 13;
 constexpr int64_t HALFMOVE_TOKEN = 21;
-constexpr int64_t CLS_TOKEN_ID   = 22;
+constexpr int64_t CLS_TOKEN_ID = 22;
 
 
 inline Square mirror(Square sq){
@@ -94,10 +94,8 @@ Move moveFromPolicyIndex(unsigned index, Position const& pos){
         const Square modelFrom{index / 64u};
         const Square modelTo{index % 64u};
         from = flip ? mirror(modelFrom) : modelFrom;
-        to   = flip ? mirror(modelTo)   : modelTo;
+        to = flip ? mirror(modelTo) : modelTo;
 
-        // Queen promotion is implicit, but only if a pawn
-        // is actually doing the moving.
         const SquareContent fromContent{pos.getSquareContent(from)};
         if(fromContent.pieceType == PieceType::Pawn){
             const Rank backRank{(pos.turn() == Color::White) ? ranks::r8 : ranks::r1};
@@ -107,7 +105,7 @@ Move moveFromPolicyIndex(unsigned index, Position const& pos){
             }
         }
     } else {
-        // 4096 + (from-48)*24 + (to-56)*3 + pieceIdx in white-POV.
+        // Underpromotion encoding: 4096 + fromFile*24 + toFile*3 + pieceIdx (white POV).
         const unsigned promoIdx{index - 4096u};
         const unsigned modelFromFile{promoIdx / 24u};
         const unsigned modelToFile{(promoIdx / 3u) % 8u};
@@ -115,7 +113,7 @@ Move moveFromPolicyIndex(unsigned index, Position const& pos){
         const Square modelFrom{48u + modelFromFile};
         const Square modelTo{56u + modelToFile};
         from = flip ? mirror(modelFrom) : modelFrom;
-        to   = flip ? mirror(modelTo)   : modelTo;
+        to = flip ? mirror(modelTo) : modelTo;
 
         constexpr PieceType promoTable[]{
             PieceType::Rook, PieceType::Bishop, PieceType::Knight
@@ -154,12 +152,12 @@ Move moveFromPolicyIndex(unsigned index, Position const& pos){
 unsigned policyIndexOf(Move const& move, Position const& pos){
     const bool flip{pos.turn() == Color::Black};
     const Square from{flip ? mirror(move.from()) : move.from()};
-    const Square to  {flip ? mirror(move.to())   : move.to()};
+    const Square to{flip ? mirror(move.to()) : move.to()};
 
     if(move.isPromotion() && move.promotionPieceType() != PieceType::Queen){
         // 4096 + fromFile*24 + toFile*3 + pieceIdx, where 0=R, 1=B, 2=N.
         const unsigned fromFile{file_of(from)};
-        const unsigned toFile  {file_of(to)};
+        const unsigned toFile{file_of(to)};
         unsigned pieceIdx{0};
         switch(move.promotionPieceType()){
             case PieceType::Rook:   pieceIdx = 0; break;

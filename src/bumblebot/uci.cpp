@@ -1,8 +1,10 @@
 # include "uci.h"
 
 # include <algorithm>
+# include <array>
 # include <atomic>
 # include <cctype>
+# include <chrono>
 # include <cmath>
 # include <iostream>
 # include <mutex>
@@ -17,15 +19,20 @@
 # include "perft.h"
 # include "position.h"
 # include "debugging.h"
+# include "nn/evaluator.h"
+# include "nn/nn_utils.h"
 # include "search/search.h"
 
 
 namespace {
 
 constexpr unsigned kHashDefaultMb = 16;
-constexpr unsigned kHashMinMb     = 1;
-constexpr unsigned kHashMaxMb     = 33554432;
-constexpr unsigned kThreadsMax    = 1;
+constexpr unsigned kHashMinMb = 1;
+constexpr unsigned kHashMaxMb = 33554432;
+constexpr unsigned kThreadsMax = 64;
+constexpr unsigned kBatchSizeDefault = 32;
+constexpr unsigned kBatchSizeMin = 1;
+constexpr unsigned kBatchSizeMax = 256;
 
 
 std::string toLower(std::string s){
@@ -55,7 +62,7 @@ bool applyUciMove(Position& position, std::string const& uci){
     if(uci[3] < '1' || uci[3] > '8') return false;
 
     const Square from{static_cast<Square>((uci[0] - 'a') + 8 * (uci[1] - '1'))};
-    const Square to  {static_cast<Square>((uci[2] - 'a') + 8 * (uci[3] - '1'))};
+    const Square to{static_cast<Square>((uci[2] - 'a') + 8 * (uci[3] - '1'))};
     const PieceType promo{(uci.size() >= 5) ? promoFromChar(uci[4]) : PieceType::None};
 
     MoveList legal{};
@@ -123,15 +130,14 @@ std::string uciOf(Move const& m){
 }
 
 
-// Win% -> centipawns, from https://lichess.org/page/accuracy
-// Inverse of  win% = 1 / (1 + exp(-magic * cp))  with magic = 0.00368208.
+// Inverse of win% = 1 / (1 + exp(-magic * cp)), magic from https://lichess.org/page/accuracy.
 int qToCp(float q){
     constexpr double magic{0.00368208};
     constexpr int kCap{1000};
     if(q <= 0.0f) return -kCap;
-    if(q >= 1.0f) return  kCap;
+    if(q >= 1.0f) return kCap;
     double cp = -std::log(1.0 / static_cast<double>(q) - 1.0) / magic;
-    if(cp >  kCap) cp =  kCap;
+    if(cp > kCap) cp = kCap;
     if(cp < -kCap) cp = -kCap;
     return static_cast<int>(cp);
 }
@@ -173,6 +179,70 @@ void stopAndJoin(std::atomic<bool>& stopFlag, std::thread& worker){
 }
 
 
+void printProfile(std::ostream& os, const SearchProfile& p){
+    const int64_t totalNs{p.selectNs + p.expandNs + p.nnNs + p.backpropNs};
+    auto pct = [&](int64_t ns) -> double {
+        return (totalNs <= 0) ? 0.0 : (100.0 * static_cast<double>(ns) / static_cast<double>(totalNs));
+    };
+
+    os << "info string profile"
+       << " iters=" << p.iterations
+       << " select_ms=" << (p.selectNs / 1'000'000)
+       << " expand_ms=" << (p.expandNs / 1'000'000)
+       << " nn_ms=" << (p.nnNs / 1'000'000)
+       << " backprop_ms=" << (p.backpropNs / 1'000'000)
+       << " select_pct=" << pct(p.selectNs)
+       << " expand_pct=" << pct(p.expandNs)
+       << " nn_pct=" << pct(p.nnNs)
+       << " backprop_pct=" << pct(p.backpropNs)
+       << " nn_calls=" << p.nnCalls
+       << " expand_races=" << p.expandRaces
+       << std::endl;
+}
+
+
+void runBenchNn(std::ostream& os){
+    constexpr std::array<unsigned, 8> kBatchSizes{1, 2, 4, 8, 16, 32, 64, 128};
+    constexpr unsigned kWarmup = 8;
+    constexpr unsigned kIters  = 200;
+
+    Position startPos{};
+    const nn::ModelInput sample{nn::encode_board(startPos)};
+
+    std::vector<nn::ModelInput> batch;
+    for(unsigned N : kBatchSizes){
+        batch.assign(N, sample);
+
+        for(unsigned w{0}; w < kWarmup; ++w){
+            auto outs = nn::Evaluator::instance().evaluate_batch(batch.data(), batch.size());
+            (void)outs;
+        }
+
+        const auto t0 = std::chrono::steady_clock::now();
+        for(unsigned i{0}; i < kIters; ++i){
+            auto outs = nn::Evaluator::instance().evaluate_batch(batch.data(), batch.size());
+            (void)outs;
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+
+        const int64_t elapsedUs{
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()
+        };
+        const double msPerBatch{
+            static_cast<double>(elapsedUs) / (static_cast<double>(kIters) * 1000.0)
+        };
+        const double evalsPerSec{
+            (elapsedUs <= 0) ? 0.0
+                : (static_cast<double>(N) * kIters * 1'000'000.0 / static_cast<double>(elapsedUs))
+        };
+        os << "info string bench_nn batch=" << N
+           << " ms_per_batch=" << msPerBatch
+           << " evals_per_sec=" << static_cast<int64_t>(evalsPerSec)
+           << std::endl;
+    }
+}
+
+
 void spawnSearch(Position& position, Search& search,
                  const SearchLimits& limits,
                  std::atomic<bool>& stopFlag, std::thread& worker,
@@ -182,11 +252,11 @@ void spawnSearch(Position& position, Search& search,
         auto onInfo = [&](const SearchStats& s, const std::vector<Move>& pv){
             std::lock_guard<std::mutex> lk{coutMutex};
             std::cout << "info"
-                      << " depth "    << s.avgDepth
+                      << " depth " << s.avgDepth
                       << " seldepth " << s.maxDepth
-                      << " nodes "    << s.nodes
-                      << " nps "      << s.nps()
-                      << " time "     << s.elapsedMs
+                      << " nodes " << s.nodes
+                      << " nps " << s.nps()
+                      << " time " << s.elapsedMs
                       << " score cp " << qToCp(s.rootQ);
             if(!pv.empty()){
                 std::cout << " pv";
@@ -198,6 +268,9 @@ void spawnSearch(Position& position, Search& search,
         Search::Result r{search.search(position, limits, stopFlag, onInfo)};
 
         std::lock_guard<std::mutex> lk{coutMutex};
+        #ifndef NDEBUG
+        printProfile(std::cout, search.profile());
+        #endif
         std::cout << "bestmove " << (r.best.bits ? uciOf(r.best) : std::string{"0000"});
         if(r.ponder.bits){
             std::cout << " ponder " << uciOf(r.ponder);
@@ -210,7 +283,8 @@ void spawnSearch(Position& position, Search& search,
 void handleSetOption(std::istringstream& ss,
                      Search& search,
                      unsigned& hashSizeMb,
-                     unsigned& numThreads){
+                     unsigned& numThreads,
+                     unsigned& batchSize){
     std::string token;
     if(!(ss >> token) || token != "name") return;
 
@@ -242,6 +316,15 @@ void handleSetOption(std::istringstream& ss,
             if(n < 1) n = 1;
             if(n > static_cast<long long>(kThreadsMax)) n = kThreadsMax;
             numThreads = static_cast<unsigned>(n);
+            search.setNumThreads(numThreads);
+        } catch(...){}
+    } else if(nameLower == "batchsize"){
+        try{
+            long long n{std::stoll(value)};
+            if(n < static_cast<long long>(kBatchSizeMin)) n = kBatchSizeMin;
+            if(n > static_cast<long long>(kBatchSizeMax)) n = kBatchSizeMax;
+            batchSize = static_cast<unsigned>(n);
+            nn::Evaluator::instance().setBatchSize(batchSize);
         } catch(...){}
     }
 }
@@ -250,7 +333,6 @@ void handleSetOption(std::istringstream& ss,
 void handleGo(std::istringstream& ss, Position& position, Search& search,
               std::atomic<bool>& stopFlag, std::thread& worker,
               std::mutex& coutMutex){
-    // Peek for `perft N` short-circuit before consuming the rest as go params.
     auto savedPos = ss.tellg();
     std::string first;
     if(ss >> first && first == "perft"){
@@ -281,7 +363,10 @@ void run_uci(){
 
     unsigned hashSizeMb{kHashDefaultMb};
     unsigned numThreads{1};
+    unsigned batchSize{kBatchSizeDefault};
     search.setHashSizeMb(hashSizeMb);
+    search.setNumThreads(numThreads);
+    nn::Evaluator::instance().setBatchSize(batchSize);
 
     std::string line;
     while(std::getline(std::cin, line)){
@@ -297,18 +382,18 @@ void run_uci(){
                       << " min " << kHashMinMb << " max " << kHashMaxMb << std::endl;
             std::cout << "option name Threads type spin default 1 min 1 max "
                       << kThreadsMax << std::endl;
+            std::cout << "option name BatchSize type spin default " << kBatchSizeDefault
+                      << " min " << kBatchSizeMin << " max " << kBatchSizeMax << std::endl;
             std::cout << "uciok" << std::endl;
         } else if(command == "isready"){
             std::lock_guard<std::mutex> lk{coutMutex};
             std::cout << "readyok" << std::endl;
         } else if(command == "setoption"){
             stopAndJoin(stopFlag, worker);
-            handleSetOption(ss, search, hashSizeMb, numThreads);
+            handleSetOption(ss, search, hashSizeMb, numThreads, batchSize);
         } else if(command == "ucinewgame"){
             stopAndJoin(stopFlag, worker);
             position = Position{};
-            search   = Search{};
-            search.setHashSizeMb(hashSizeMb);
         } else if(command == "position"){
             stopAndJoin(stopFlag, worker);
             handlePosition(ss, position);
@@ -320,6 +405,13 @@ void run_uci(){
         } else if(command == "perft"){
             stopAndJoin(stopFlag, worker);
             run_perft_tests();
+        } else if(command == "bench"){
+            stopAndJoin(stopFlag, worker);
+            std::string what;
+            if(ss >> what && what == "nn"){
+                std::lock_guard<std::mutex> lk{coutMutex};
+                runBenchNn(std::cout);
+            }
         } else if(command == "quit"){
             stopAndJoin(stopFlag, worker);
             break;

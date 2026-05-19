@@ -1,14 +1,18 @@
 # ifndef BITBOARD_H
 # define BITBOARD_H
 
-#include <array>
+# include <array>
 
-#include "types.h"
+# include "types.h"
 
 
 struct Magic {
     Magic(Bitboard mask, Bitboard magic, unsigned shift)
-        : mask(mask), magic(magic), attack_table(nullptr), shift(shift) {}
+        : mask{mask},
+          magic{magic},
+          attack_table{nullptr},
+          shift{shift}
+    {}
 
     Bitboard mask;
     u64 magic;

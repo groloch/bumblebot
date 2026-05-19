@@ -9,9 +9,9 @@ namespace {
 
 inline Hash castleRightsHash(CastleRights const& cr){
     Hash h{0};
-    if(cr.whiteKingside)  h ^= zobrist::castle[0];
+    if(cr.whiteKingside) h ^= zobrist::castle[0];
     if(cr.whiteQueenside) h ^= zobrist::castle[1];
-    if(cr.blackKingside)  h ^= zobrist::castle[2];
+    if(cr.blackKingside) h ^= zobrist::castle[2];
     if(cr.blackQueenside) h ^= zobrist::castle[3];
     return h;
 }
@@ -19,8 +19,13 @@ inline Hash castleRightsHash(CastleRights const& cr){
 }
 
 
-Position::Position() : board{},
-sideToMove{Color::White}, positionData{}, plyCount{0}, zobristHash{0} {
+Position::Position()
+    : board{},
+      sideToMove{Color::White},
+      positionData{},
+      plyCount{0},
+      zobristHash{0}
+{
     history.reserve(64);
 
     setSquareContent(squares::a1, SquareContent(Color::White, PieceType::Rook));
@@ -63,12 +68,17 @@ sideToMove{Color::White}, positionData{}, plyCount{0}, zobristHash{0} {
     recomputeZobristHash();
 }
 
-Position::Position(const char* fen) : board{}, sideToMove{Color::White},
-positionData{}, plyCount{0}, zobristHash{0} {
+Position::Position(const char* fen)
+    : board{},
+      sideToMove{Color::White},
+      positionData{},
+      plyCount{0},
+      zobristHash{0}
+{
     history.reserve(64);
 
-    Rank currentRank {7};
-    File currentFile {0};
+    Rank currentRank{7};
+    File currentFile{0};
 
     bool inPiecePlacement{true};
     bool inSideToMove{false};
@@ -448,9 +458,6 @@ bool Position::canCastle(Color color, CastleDirection direction) const{
 }
 
 bool Position::isLegal(Move const& move) const{
-    // Caller (movegen::generatePseudoLegalAll) guarantees move.from() holds a friendly piece
-    // and move.to() is not occupied by a friendly piece, so the redundant sanity checks are
-    // skipped here.
     const Square moveFrom{move.from()};
     const Square moveTo{move.to()};
     const SquareContent fromContent{board[moveFrom]};
@@ -570,7 +577,7 @@ inline void Position::movePiece(Color c, PieceType pt, Square from, Square to){
     const Bitboard bb{bitboard_of(from) | bitboard_of(to)};
     pieceBb(c, pt) ^= bb;
     if(c == Color::White) whitePieces ^= bb;
-    else                  blackPieces ^= bb;
+    else blackPieces ^= bb;
     allPieces ^= bb;
     board[from] = SquareContent{};
     board[to] = SquareContent{c, pt};
@@ -581,7 +588,7 @@ inline void Position::placePiece(Color c, PieceType pt, Square sq){
     const Bitboard bb{bitboard_of(sq)};
     pieceBb(c, pt) ^= bb;
     if(c == Color::White) whitePieces ^= bb;
-    else                  blackPieces ^= bb;
+    else blackPieces ^= bb;
     allPieces ^= bb;
     board[sq] = SquareContent{c, pt};
     zobristHash ^= zobrist::pieceKey(c, pt, sq);
@@ -591,7 +598,7 @@ inline void Position::removePiece(Color c, PieceType pt, Square sq){
     const Bitboard bb{bitboard_of(sq)};
     pieceBb(c, pt) ^= bb;
     if(c == Color::White) whitePieces ^= bb;
-    else                  blackPieces ^= bb;
+    else blackPieces ^= bb;
     allPieces ^= bb;
     board[sq] = SquareContent{};
     zobristHash ^= zobrist::pieceKey(c, pt, sq);
@@ -648,7 +655,6 @@ void Position::applyMove(Move const& move){
         movePiece(moverColor, moverType, from, to);
     }
 
-    // Castle rights
     if(moverType == PieceType::King){
         if(moverColor == Color::White){
             positionData.castleRights.whiteKingside = false;
@@ -670,7 +676,6 @@ void Position::applyMove(Move const& move){
         else if(to == squares::h8)   positionData.castleRights.blackKingside  = false;
     }
 
-    // En passant target
     if(moverType == PieceType::Pawn){
         const Rank fromRank{rank_of(from)};
         const Rank toRank{rank_of(to)};
@@ -685,7 +690,6 @@ void Position::applyMove(Move const& move){
         positionData.enPassantTarget = squares::NoneSquare;
     }
 
-    // 50-move clock, ply count
     if(moverType == PieceType::Pawn || move.isCapture()){
         positionData.pliesSinceLastCaptureOrPawnMove = 0;
     } else {
@@ -693,7 +697,6 @@ void Position::applyMove(Move const& move){
     }
     if(sideToMove == Color::Black) ++plyCount;
 
-    // Zobrist: castle rights delta, EP file delta, side-to-move flip.
     zobristHash ^= castleRightsHash(oldCastleRights) ^ castleRightsHash(positionData.castleRights);
     if(oldEnPassant != squares::NoneSquare){
         zobristHash ^= zobrist::enPassantFile[file_of(oldEnPassant)];
@@ -713,7 +716,6 @@ void Position::undoMove(Move const& move){
     const Square from{move.from()};
     const Square to{move.to()};
 
-    // After applyMove the side flipped; the piece at `to` belongs to the opposite side.
     const Color moverColor{(sideToMove == Color::White) ? Color::Black : Color::White};
     const Color oppColor{sideToMove};
 

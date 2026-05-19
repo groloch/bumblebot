@@ -1,8 +1,10 @@
 # include "search/search.h"
 
+# include <algorithm>
 # include <array>
 # include <chrono>
 # include <cstddef>
+# include <thread>
 # include <utility>
 # include <vector>
 
@@ -15,17 +17,33 @@
 
 namespace {
 
+using clock = std::chrono::steady_clock;
+
+int64_t elapsedNs(clock::time_point a, clock::time_point b){
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count();
+}
+
+void atomicMax(std::atomic<uint32_t>& target, uint32_t candidate){
+    uint32_t prev{target.load(std::memory_order_relaxed)};
+    while(prev < candidate
+          && !target.compare_exchange_weak(prev, candidate,
+                                           std::memory_order_relaxed)){}
+}
+
 std::vector<Move> extractPV(const Node& root, std::size_t maxLen = 64){
     std::vector<Move> pv;
     const Node* node{&root};
     while(pv.size() < maxLen && !node->children.empty()){
         const Edge* best{nullptr};
+        uint32_t bestVisits{0};
         for(const Edge& e : node->children){
-            if(best == nullptr || e.child.visitCount > best->child.visitCount){
+            const uint32_t v{e.child.visitCount.load(std::memory_order_relaxed)};
+            if(best == nullptr || v > bestVisits){
                 best = &e;
+                bestVisits = v;
             }
         }
-        if(best == nullptr || best->child.visitCount == 0) break;
+        if(best == nullptr || bestVisits == 0) break;
         pv.push_back(best->move);
         node = &best->child;
     }
@@ -35,11 +53,37 @@ std::vector<Move> extractPV(const Node& root, std::size_t maxLen = 64){
 }
 
 
+void Search::Counters::reset(){
+    selectNs.store(0, std::memory_order_relaxed);
+    expandNs.store(0, std::memory_order_relaxed);
+    nnNs.store(0, std::memory_order_relaxed);
+    backpropNs.store(0, std::memory_order_relaxed);
+    iterations.store(0, std::memory_order_relaxed);
+    nnCalls.store(0, std::memory_order_relaxed);
+    expandRaces.store(0, std::memory_order_relaxed);
+    maxDepth.store(0, std::memory_order_relaxed);
+    cumDepth.store(0, std::memory_order_relaxed);
+}
+
+
+SearchProfile Search::profile() const {
+    SearchProfile p;
+    p.selectNs = counters_.selectNs.load(std::memory_order_relaxed);
+    p.expandNs = counters_.expandNs.load(std::memory_order_relaxed);
+    p.nnNs = counters_.nnNs.load(std::memory_order_relaxed);
+    p.backpropNs = counters_.backpropNs.load(std::memory_order_relaxed);
+    p.iterations = counters_.iterations.load(std::memory_order_relaxed);
+    p.nnCalls = counters_.nnCalls.load(std::memory_order_relaxed);
+    p.expandRaces = counters_.expandRaces.load(std::memory_order_relaxed);
+    return p;
+}
+
+
 Search::Result Search::search(Position& position,
                               const SearchLimits& limits,
                               std::atomic<bool>& stop,
                               InfoCallback onInfo){
-    using clock = std::chrono::steady_clock;
+    counters_.reset();
 
     Node root{0.0f};
     expand(position, root);
@@ -48,83 +92,67 @@ Search::Result Search::search(Position& position,
         return Result{Move{}, Move{}};
     }
 
-    std::vector<Edge*> path;
-    path.reserve(128);
+    auto rootVisits = [&]() -> uint32_t {
+        return root.visitCount.load(std::memory_order_relaxed);
+    };
 
-    unsigned maxDepth{0};
-    unsigned long long cumDepth{0};
+    auto avgDepthNow = [&]() -> unsigned {
+        const uint32_t v{rootVisits()};
+        return (v == 0)
+            ? 0u
+            : static_cast<unsigned>(counters_.cumDepth.load(std::memory_order_relaxed) / v);
+    };
 
     const auto t0 = clock::now();
-    auto tLastInfo = t0;
 
     auto elapsedMsAt = [&](clock::time_point tp){
         return std::chrono::duration_cast<std::chrono::milliseconds>(tp - t0).count();
     };
 
-    auto avgDepthNow = [&]() -> unsigned {
-        return (root.visitCount == 0)
-            ? 0u
-            : static_cast<unsigned>(cumDepth / root.visitCount);
-    };
-
     auto buildStats = [&](clock::time_point now){
         SearchStats s;
-        s.nodes     = root.visitCount;
-        s.avgDepth  = avgDepthNow();
-        s.maxDepth  = maxDepth;
+        s.nodes = rootVisits();
+        s.avgDepth = avgDepthNow();
+        s.maxDepth = counters_.maxDepth.load(std::memory_order_relaxed);
         s.elapsedMs = elapsedMsAt(now);
-        // Backprop walks all the way up to root, applying one extra flip;
-        // root.qValue ends up stored from the opponent's POV. Flip it back so
-        // rootQ is the win probability for the side to move at the root.
-        s.rootQ     = (root.visitCount == 0) ? ZERO_VALUE : (1.0f - root.qValue);
+        s.rootQ = (rootVisits() == 0) ? ZERO_VALUE : (1.0f - root.qValue());
         return s;
     };
 
     auto shouldStopNow = [&](clock::time_point now){
         if(stop.load(std::memory_order_relaxed)) return true;
-        if(limits.maxNodes != 0 && root.visitCount >= limits.maxNodes) return true;
+        if(limits.maxNodes != 0 && rootVisits() >= limits.maxNodes) return true;
         if(limits.maxDepth != 0 && avgDepthNow() >= limits.maxDepth) return true;
         if(limits.movetimeMs > 0 && elapsedMsAt(now) >= limits.movetimeMs) return true;
         return false;
     };
 
-    while(true){
-        auto now = clock::now();
-        if(shouldStopNow(now)) break;
+    const unsigned workerCount{std::max(1u, numThreads)};
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+    for(unsigned i{0}; i < workerCount; ++i){
+        workers.emplace_back([this, &position, &root, &stop]{
+            this->worker(position, root, stop);
+        });
+    }
+
+    auto tLastInfo = t0;
+    while(!stop.load(std::memory_order_relaxed)){
+        const auto now = clock::now();
+        if(shouldStopNow(now)){
+            stop.store(true, std::memory_order_relaxed);
+            break;
+        }
         if(onInfo &&
            std::chrono::duration_cast<std::chrono::milliseconds>(now - tLastInfo).count() >= 1000){
             onInfo(buildStats(now), extractPV(root));
             tLastInfo = now;
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
 
-        path.clear();
-        Node* node{&root};
-
-        while(!node->isTerminal && !node->children.empty()){
-            Edge* edge{node->selectChild()};
-            if(edge == nullptr) break;
-            path.push_back(edge);
-            position.applyMove(edge->move);
-            node = &edge->child;
-        }
-
-        if(path.size() > maxDepth){
-            maxDepth = static_cast<unsigned>(path.size());
-        }
-        cumDepth += path.size();
-
-        float value{expand(position, *node)};
-
-        Node* current{node};
-        unsigned idx{static_cast<unsigned>(path.size())};
-        while(true){
-            value = 1.0f - value;
-            current->update(value);
-            if(idx == 0) break;
-            --idx;
-            position.undoMove(path[idx]->move);
-            current = (idx == 0) ? &root : &path[idx - 1]->child;
-        }
+    for(std::thread& w : workers){
+        w.join();
     }
 
     std::vector<Move> pv{extractPV(root)};
@@ -134,14 +162,101 @@ Search::Result Search::search(Position& position,
     }
 
     Result r;
-    r.best   = pv.empty()       ? Move{} : pv[0];
+    r.best = pv.empty() ? Move{} : pv[0];
     r.ponder = (pv.size() >= 2) ? pv[1] : Move{};
     return r;
 }
 
 
+void Search::worker(Position const& rootPosition,
+                    Node& root,
+                    std::atomic<bool> const& stop){
+    std::vector<Edge*> path;
+    path.reserve(128);
+
+    while(!stop.load(std::memory_order_relaxed)){
+        path.clear();
+        Position scratch{rootPosition};
+        Node* node{&root};
+
+        // Selection
+        const auto tSel0 = clock::now();
+        while(!node->isTerminal && node->expanded.load(std::memory_order_acquire)){
+            Edge* edge{node->selectChild()};
+            if(edge == nullptr) break;
+            edge->child.addVirtualLoss();
+            path.push_back(edge);
+            scratch.applyMove(edge->move);
+            node = &edge->child;
+        }
+        const auto tSel1 = clock::now();
+        counters_.selectNs.fetch_add(elapsedNs(tSel0, tSel1),
+                                     std::memory_order_relaxed);
+
+        const uint32_t depth{static_cast<uint32_t>(path.size())};
+        counters_.cumDepth.fetch_add(depth, std::memory_order_relaxed);
+        atomicMax(counters_.maxDepth, depth);
+
+        // Expansion
+        float value{0.0f};
+        bool doBackprop{true};
+
+        if(node->isTerminal){
+            value = expand(scratch, *node);
+        } else {
+            bool expected{false};
+            const bool claimed{
+                node->expanding.compare_exchange_strong(expected, true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire)
+            };
+            if(claimed){
+                value = expand(scratch, *node);
+            } else {
+                for(Edge* e : path){
+                    e->child.removeVirtualLoss();
+                }
+                counters_.expandRaces.fetch_add(1, std::memory_order_relaxed);
+                doBackprop = false;
+            }
+        }
+
+        if(!doBackprop) continue;
+
+        // Backpropagation
+        const auto tBp0 = clock::now();
+        Node* current{node};
+        unsigned idx{static_cast<unsigned>(path.size())};
+        while(true){
+            value = 1.0f - value;
+            current->update(value);
+            if(current != &root){
+                current->removeVirtualLoss();
+            }
+            if(idx == 0) break;
+            --idx;
+            current = (idx == 0) ? &root : &path[idx - 1]->child;
+        }
+        const auto tBp1 = clock::now();
+        counters_.backpropNs.fetch_add(elapsedNs(tBp0, tBp1),
+                                       std::memory_order_relaxed);
+        counters_.iterations.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+
 float Search::expand(Position& position, Node& node){
+    const auto tExpand0 = clock::now();
+    int64_t nnDeltaNs{0};
+    auto accountExpand = [&](){
+        const int64_t totalNs{elapsedNs(tExpand0, clock::now())};
+        counters_.expandNs.fetch_add(totalNs - nnDeltaNs,
+                                     std::memory_order_relaxed);
+        counters_.nnNs.fetch_add(nnDeltaNs, std::memory_order_relaxed);
+    };
+
     if(node.isTerminal){
+        accountExpand();
         return node.terminalValue;
     }
 
@@ -151,38 +266,42 @@ float Search::expand(Position& position, Node& node){
     if(legalMoves.size == 0){
         node.isTerminal = true;
         node.terminalValue = position.inCheck() ? 0.0f : ZERO_VALUE;
+        node.expanded.store(true, std::memory_order_release);
+        accountExpand();
         return node.terminalValue;
     }
     if(position.halfmoveClock() >= 100){
         node.isTerminal = true;
         node.terminalValue = ZERO_VALUE;
+        node.expanded.store(true, std::memory_order_release);
+        accountExpand();
         return node.terminalValue;
     }
     if(position.isRepetition()){
         node.isTerminal = true;
         node.terminalValue = ZERO_VALUE;
+        node.expanded.store(true, std::memory_order_release);
+        accountExpand();
         return node.terminalValue;
     }
 
     const Hash key{position.hash()};
-    auto it = evalCache.find(key);
-    if(it == evalCache.end()){
-        nn::ModelOutput out{nn::Evaluator::instance().evaluate(nn::encode_board(position))};
-        EvalEntry entry;
-        entry.policy = out.policy;
-        entry.value  = out.value;
-        if((evalCache.size() + 1) * kBytesPerEntry > hashBudgetBytes){
-            evalCache.clear();
-        }
-        it = evalCache.emplace(key, std::move(entry)).first;
-    }
-    EvalEntry const& eval{it->second};
+    nn::ModelInput input{nn::encode_board(position)};
+
+    const auto tNn0 = clock::now();
+    std::shared_future<nn::ModelOutput> fut{
+        nn::Evaluator::instance().submit(key, std::move(input))
+    };
+    nn::ModelOutput out{fut.get()};
+    const auto tNn1 = clock::now();
+    nnDeltaNs += elapsedNs(tNn0, tNn1);
+    counters_.nnCalls.fetch_add(1, std::memory_order_relaxed);
 
     std::array<float, 256> priors{};
     float priorSum{0.0f};
     for(unsigned i{0}; i < legalMoves.size; ++i){
-        const unsigned idx{nn::policyIndexOf(legalMoves.moves[i], position)};
-        priors[i] = eval.policy[idx];
+        const unsigned pIdx{nn::policyIndexOf(legalMoves.moves[i], position)};
+        priors[i] = out.policy[pIdx];
         priorSum += priors[i];
     }
     const float uniform{1.0f / static_cast<float>(legalMoves.size)};
@@ -193,6 +312,8 @@ float Search::expand(Position& position, Node& node){
         const float p{(priorSum > 0.0f) ? priors[i] * invSum : uniform};
         node.children.push_back(Edge{legalMoves.moves[i], Node{p}});
     }
+    node.expanded.store(true, std::memory_order_release);
 
-    return eval.value;
+    accountExpand();
+    return out.value;
 }

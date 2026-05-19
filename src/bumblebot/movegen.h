@@ -21,9 +21,6 @@ struct Ctx {
     Bitboard occ;          // allPieces
     Bitboard notFriendly;  // ~friendly
 
-    // Fields below are only meaningful when CheckLegal == true.
-    // For pseudo-legal generation, targetMask stays bitboards::full and the
-    // generators skip pin-mask/target-mask filtering entirely.
     Bitboard targetMask;             // squares non-king pieces may LAND on
     Bitboard opponentAttacks;        // squares attacked by opponent
     Bitboard checkers;               // opponent pieces checking us

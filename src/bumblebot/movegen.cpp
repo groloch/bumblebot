@@ -9,7 +9,6 @@ namespace movegen {
 template<bool CheckLegal>
 inline void appendPromotions(Ctx const& ctx, Square from, Square to,
                              bool isCapture, PieceType capturedPt){
-    // Target/pin filtering is done by the caller for both Legal and PseudoLegal modes.
     for(PieceType pt : {PieceType::Queen, PieceType::Rook, PieceType::Bishop, PieceType::Knight}){
         Move m{from, to, false, false, true, isCapture, true, pt, capturedPt};
         ctx.list.append(m);
@@ -44,16 +43,12 @@ void generatePawnMoves(Ctx const& ctx, Bitboard pawns){
         (C == Color::White) ? Direction::NorthEast : Direction::SouthEast
     };
 
-    // Single push
     Bitboard singlePush{shift<pushDir>(pawns) & empty};
-    // Double push from rank 2/7 must pass through rank 3/6 (so the intermediate
-    // square must also be empty); we then intersect with the destination rank.
     Bitboard doublePush{shift<pushDir>(singlePush & preDoublePushRank) & empty & doublePushRank};
 
     Bitboard quietPush{singlePush & ~promoRank};
     Bitboard promoPush{singlePush & promoRank};
 
-    // Captures
     Bitboard capL{shift<capLDir>(pawns) & enemyPieces};
     Bitboard promoCapL{capL & promoRank};
     Bitboard quietCapL{capL & ~promoRank};
@@ -133,7 +128,6 @@ void generatePawnMoves(Ctx const& ctx, Bitboard pawns){
     emitPromoCapture(promoCapL, capLOff);
     emitPromoCapture(promoCapR, capROff);
 
-    // En passant
     Square epSq{ctx.pos.enPassant()};
     if(epSq != squares::NoneSquare){
         Bitboard epBb{bitboard_of(epSq)};
@@ -143,7 +137,6 @@ void generatePawnMoves(Ctx const& ctx, Bitboard pawns){
             Square from{static_cast<Square>(static_cast<int>(to) - capLOff)};
             Move m{from, to, true, false, false, true, true, PieceType::None, PieceType::Pawn};
             if constexpr(CheckLegal){
-                // EP must either land on a target-mask square, or capture the checker pawn.
                 const Square epPawnSq{
                     (C == Color::White) ? static_cast<Square>(to - 8) : static_cast<Square>(to + 8)
                 };
@@ -191,7 +184,6 @@ void generateKnightMoves(Ctx const& ctx, Bitboard knights){
     while(knights){
         Square from{poplsb(knights)};
         if constexpr(CheckLegal){
-            // A pinned knight can never move legally.
             if((*ctx.pinMasks)[from] != bitboards::full) continue;
         }
         Bitboard targets{knightAttacks[from] & ctx.notFriendly};
@@ -275,7 +267,6 @@ void generateKingMoves(Ctx const& ctx, Bitboard kings){
 
     Square from{lsb(kings)};
 
-    // Regular king moves: filter by opponentAttacks in legal mode.
     Bitboard targets{kingAttacks[from] & ctx.notFriendly};
     if constexpr(CheckLegal){
         targets &= ~ctx.opponentAttacks;
@@ -288,7 +279,6 @@ void generateKingMoves(Ctx const& ctx, Bitboard kings){
         ctx.list.append(m);
     }
 
-    // Castling
     Bitboard kingsideLookup, queensideLookup;
     Square kingsideTo, queensideTo;
     if constexpr(C == Color::White){
@@ -307,9 +297,6 @@ void generateKingMoves(Ctx const& ctx, Bitboard kings){
        && !(ctx.occ & kingsideLookup)){
         bool ok{true};
         if constexpr(CheckLegal){
-            // Cannot castle out of check, through check, or into check. The king
-            // crosses from `from` to `kingsideTo`; check every square along the way
-            // (including the start, since in-check rules out castling).
             Bitboard through{bitboard_of(from) | bitboard_of(from + 1u) | bitboard_of(from + 2u)};
             ok = (through & ctx.opponentAttacks) == 0;
         }
@@ -322,9 +309,6 @@ void generateKingMoves(Ctx const& ctx, Bitboard kings){
        && !(ctx.occ & queensideLookup)){
         bool ok{true};
         if constexpr(CheckLegal){
-            // Queenside: king crosses from..from-2. The b-file square needs to be
-            // empty (already enforced by queensideLookup) but does NOT need to be
-            // unattacked. Only the king-path squares (from, from-1, from-2) do.
             Bitboard through{bitboard_of(from) | bitboard_of(from - 1u) | bitboard_of(from - 2u)};
             ok = (through & ctx.opponentAttacks) == 0;
         }
@@ -386,7 +370,6 @@ void generateLegalAll(Position& position, MoveList& moveList){
     const unsigned numCheckers{popcount(checkers)};
     const bool inCheck{checkers != 0};
 
-    // Compute the target mask for non-king pieces.
     Bitboard targetMask;
     if(numCheckers == 0){
         targetMask = bitboards::full;
@@ -394,7 +377,6 @@ void generateLegalAll(Position& position, MoveList& moveList){
         const Square checkerSq{lsb(checkers)};
         const SquareContent checker{position.getSquareContent(checkerSq)};
         if(checker.pieceType == PieceType::Knight || checker.pieceType == PieceType::Pawn){
-            // Non-sliding checker can only be captured; no blocking is possible.
             targetMask = bitboard_of(checkerSq);
         } else {
             const bool rookLike{
@@ -410,7 +392,6 @@ void generateLegalAll(Position& position, MoveList& moveList){
             targetMask = between | bitboard_of(checkerSq);
         }
     } else {
-        // Double check — non-king pieces cannot save the king.
         targetMask = bitboards::empty;
     }
 
@@ -430,7 +411,6 @@ void generateLegalAll(Position& position, MoveList& moveList){
         inCheck
     };
 
-    // In double check, only king moves can be legal.
     if(numCheckers >= 2){
         if(stm == Color::White){
             generateKingMoves<Color::White, true>(ctx, position.whiteKings);
