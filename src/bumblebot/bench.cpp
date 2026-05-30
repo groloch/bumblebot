@@ -12,7 +12,7 @@
 
 namespace {
 
-constexpr unsigned kDefaultNodesPerPosition = 2000;
+constexpr unsigned kDefaultNodesPerPosition = 500;
 
 }
 
