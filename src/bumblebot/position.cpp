@@ -23,6 +23,7 @@ Position::Position()
     : board{},
       sideToMove{Color::White},
       positionData{},
+      castleRookSq{{{squares::h1, squares::a1}, {squares::h8, squares::a8}}},
       plyCount{0},
       zobristHash{0}
 {
@@ -72,6 +73,7 @@ Position::Position(const char* fen)
     : board{},
       sideToMove{Color::White},
       positionData{},
+      castleRookSq{{{squares::h1, squares::a1}, {squares::h8, squares::a8}}},
       plyCount{0},
       zobristHash{0}
 {
@@ -126,24 +128,71 @@ Position::Position(const char* fen)
                 // Invalid FEN : side to move
             }
         } else if (inCastleRights) {
-            if (c == '-'){
-                positionData.castleRights.whiteKingside = false;
-                positionData.castleRights.whiteQueenside = false;
-                positionData.castleRights.blackKingside = false;
-                positionData.castleRights.blackQueenside = false;
-            } else if (c == 'K') {
-                positionData.castleRights.whiteKingside = true;
-            } else if (c == 'Q') {
-                positionData.castleRights.whiteQueenside = true;
-            } else if (c == 'k') {
-                positionData.castleRights.blackKingside = true;
-            } else if (c == 'q') {
-                positionData.castleRights.blackQueenside = true;
-            } else if (c == ' ') {
+            if (c == ' ') {
                 inCastleRights = false;
                 inEnPassant = true;
-            } else {
-                // Invalid FEN : castle rights
+            } else if (c != '-') {
+                // Accept both standard X-FEN (K/Q/k/q) and Shredder-FEN (A-H/a-h).
+                bool isWhite{false};
+                bool xfen{false};
+                bool xfenKingside{false};
+                File rookFile{0};
+                bool ok{true};
+                if (c == 'K')                  { isWhite = true;  xfen = true; xfenKingside = true;  }
+                else if (c == 'Q')             { isWhite = true;  xfen = true; xfenKingside = false; }
+                else if (c == 'k')             { isWhite = false; xfen = true; xfenKingside = true;  }
+                else if (c == 'q')             { isWhite = false; xfen = true; xfenKingside = false; }
+                else if (c >= 'A' && c <= 'H') { isWhite = true;  rookFile = static_cast<File>(c - 'A'); }
+                else if (c >= 'a' && c <= 'h') { isWhite = false; rookFile = static_cast<File>(c - 'a'); }
+                else                            { ok = false; }
+
+                if (ok) {
+                    const Color col{isWhite ? Color::White : Color::Black};
+                    const Rank backRank{isWhite ? ranks::r1 : ranks::r8};
+                    File kingFile{8};
+                    for(File f{0}; f < 8; ++f){
+                        SquareContent sc{board[square_of(f, backRank)]};
+                        if(sc.color == col && sc.pieceType == PieceType::King){ kingFile = f; break; }
+                    }
+                    bool foundRook{true};
+                    bool isKingside{false};
+                    if (kingFile < 8) {
+                        if (xfen) {
+                            isKingside = xfenKingside;
+                            File found{8};
+                            if (isKingside) {
+                                for (File f{7}; f > kingFile && f < 8; --f) {
+                                    SquareContent sc{board[square_of(f, backRank)]};
+                                    if(sc.color == col && sc.pieceType == PieceType::Rook){ found = f; break; }
+                                }
+                            } else {
+                                for (File f{0}; f < kingFile; ++f) {
+                                    SquareContent sc{board[square_of(f, backRank)]};
+                                    if(sc.color == col && sc.pieceType == PieceType::Rook){ found = f; break; }
+                                }
+                            }
+                            if (found < 8) rookFile = found;
+                            else foundRook = false;
+                        } else {
+                            isKingside = rookFile > kingFile;
+                        }
+                    } else {
+                        foundRook = false;
+                    }
+                    if (foundRook) {
+                        const Square sq{square_of(rookFile, backRank)};
+                        const unsigned ci{isWhite ? 0u : 1u};
+                        const unsigned si{isKingside ? 0u : 1u};
+                        castleRookSq[ci][si] = sq;
+                        if (isWhite) {
+                            if (isKingside) positionData.castleRights.whiteKingside = true;
+                            else            positionData.castleRights.whiteQueenside = true;
+                        } else {
+                            if (isKingside) positionData.castleRights.blackKingside = true;
+                            else            positionData.castleRights.blackQueenside = true;
+                        }
+                    }
+                }
             }
         } else if (inEnPassant) {
             if (c >= 'a' && c <= 'h') {
@@ -440,6 +489,12 @@ Square Position::enPassant() const{
     return positionData.enPassantTarget;
 }
 
+Square Position::castleRookSquare(Color color, CastleDirection direction) const{
+    const unsigned ci{(color == Color::White) ? 0u : 1u};
+    const unsigned si{(direction == CastleDirection::Kingside) ? 0u : 1u};
+    return castleRookSq[ci][si];
+}
+
 bool Position::canCastle(Color color, CastleDirection direction) const{
     if(color == Color::White){
         if(direction == CastleDirection::Kingside){
@@ -494,12 +549,17 @@ bool Position::isLegal(Move const& move) const{
     if(fromContent.pieceType == PieceType::King){
         if(move.isCastle()){
             CastleDirection direction{
-                (moveTo > moveFrom) ? CastleDirection::Kingside : CastleDirection::Queenside
+                (file_of(moveTo) == 6) ? CastleDirection::Kingside : CastleDirection::Queenside
             };
             if(!canCastle(sideToMove, direction)) return false;
 
-            Bitboard checkSquares{inBetween<PieceType::Rook>(moveFrom, moveTo)};
-            return (checkSquares & opponentAttacks) == 0;
+            const File f1{file_of(moveFrom)};
+            const File f2{file_of(moveTo)};
+            const File lo{(f1 < f2) ? f1 : f2};
+            const File hi{(f1 < f2) ? f2 : f1};
+            const Rank backRank{(sideToMove == Color::White) ? ranks::r1 : ranks::r8};
+            const Bitboard kingPath{((1ULL << (hi - lo + 1u)) - 1u) << (backRank * 8u + lo)};
+            return (kingPath & opponentAttacks) == 0;
         }
         return (opponentAttacks & bitboard_of(moveTo)) == 0;
     } else if(!move.isEnPassant()){
@@ -647,10 +707,18 @@ void Position::applyMove(Move const& move){
         removePiece(oppColor, move.capturedPieceType(), to);
         movePiece(moverColor, moverType, from, to);
     } else if(move.isCastle()){
-        movePiece(moverColor, PieceType::King, from, to);
-        const Square rookFrom{(to > from) ? from + 3u : from - 4u};
-        const Square rookTo{(to > from) ? from + 1u : from - 1u};
-        movePiece(moverColor, PieceType::Rook, rookFrom, rookTo);
+        const CastleDirection dir{
+            (file_of(to) == 6) ? CastleDirection::Kingside : CastleDirection::Queenside
+        };
+        const Square rookFrom{castleRookSquare(moverColor, dir)};
+        const Rank backRank{(moverColor == Color::White) ? ranks::r1 : ranks::r8};
+        const Square rookTo{
+            (dir == CastleDirection::Kingside) ? square_of(5, backRank) : square_of(3, backRank)
+        };
+        removePiece(moverColor, PieceType::King, from);
+        removePiece(moverColor, PieceType::Rook, rookFrom);
+        placePiece(moverColor, PieceType::King, to);
+        placePiece(moverColor, PieceType::Rook, rookTo);
     } else {
         movePiece(moverColor, moverType, from, to);
     }
@@ -664,16 +732,22 @@ void Position::applyMove(Move const& move){
             positionData.castleRights.blackQueenside = false;
         }
     } else if(moverType == PieceType::Rook){
-        if(from == squares::a1)       positionData.castleRights.whiteQueenside = false;
-        else if(from == squares::h1)  positionData.castleRights.whiteKingside  = false;
-        else if(from == squares::a8)  positionData.castleRights.blackQueenside = false;
-        else if(from == squares::h8)  positionData.castleRights.blackKingside  = false;
+        if(moverColor == Color::White){
+            if(from == castleRookSq[0][0])       positionData.castleRights.whiteKingside  = false;
+            else if(from == castleRookSq[0][1])  positionData.castleRights.whiteQueenside = false;
+        } else {
+            if(from == castleRookSq[1][0])       positionData.castleRights.blackKingside  = false;
+            else if(from == castleRookSq[1][1])  positionData.castleRights.blackQueenside = false;
+        }
     }
     if(move.isCapture() && !move.isEnPassant() && move.capturedPieceType() == PieceType::Rook){
-        if(to == squares::a1)        positionData.castleRights.whiteQueenside = false;
-        else if(to == squares::h1)   positionData.castleRights.whiteKingside  = false;
-        else if(to == squares::a8)   positionData.castleRights.blackQueenside = false;
-        else if(to == squares::h8)   positionData.castleRights.blackKingside  = false;
+        if(oppColor == Color::White){
+            if(to == castleRookSq[0][0])       positionData.castleRights.whiteKingside  = false;
+            else if(to == castleRookSq[0][1])  positionData.castleRights.whiteQueenside = false;
+        } else {
+            if(to == castleRookSq[1][0])       positionData.castleRights.blackKingside  = false;
+            else if(to == castleRookSq[1][1])  positionData.castleRights.blackQueenside = false;
+        }
     }
 
     if(moverType == PieceType::Pawn){
@@ -733,10 +807,18 @@ void Position::undoMove(Move const& move){
         movePiece(moverColor, placedType, to, from);
         placePiece(oppColor, move.capturedPieceType(), to);
     } else if(move.isCastle()){
-        movePiece(moverColor, PieceType::King, to, from);
-        const Square rookFrom{(to > from) ? from + 3u : from - 4u};
-        const Square rookTo{(to > from) ? from + 1u : from - 1u};
-        movePiece(moverColor, PieceType::Rook, rookTo, rookFrom);
+        const CastleDirection dir{
+            (file_of(to) == 6) ? CastleDirection::Kingside : CastleDirection::Queenside
+        };
+        const Square rookFrom{castleRookSquare(moverColor, dir)};
+        const Rank backRank{(moverColor == Color::White) ? ranks::r1 : ranks::r8};
+        const Square rookTo{
+            (dir == CastleDirection::Kingside) ? square_of(5, backRank) : square_of(3, backRank)
+        };
+        removePiece(moverColor, PieceType::King, to);
+        removePiece(moverColor, PieceType::Rook, rookTo);
+        placePiece(moverColor, PieceType::King, from);
+        placePiece(moverColor, PieceType::Rook, rookFrom);
     } else {
         movePiece(moverColor, placedType, to, from);
     }

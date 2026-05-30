@@ -16,6 +16,7 @@ add_executable(bumblebot
     src/bumblebot/position.cpp
     src/bumblebot/magics.cpp
     src/bumblebot/perft.cpp
+    src/bumblebot/bench.cpp
     src/bumblebot/uci.cpp
     src/bumblebot/zobrist.cpp
     src/bumblebot/nn/evaluator.cpp
@@ -28,6 +29,9 @@ target_include_directories(bumblebot PRIVATE
     src/bumblebot
     ${ORT_ROOT}/include/onnxruntime/core/session
 )
+
+set(EVALFILE "model.onnx" CACHE STRING "Path to the model")
+target_compile_definitions(bumblebot PRIVATE EVALFILE="${EVALFILE}")
 
 target_link_directories(bumblebot PRIVATE ${ORT_ROOT}/build/Linux/Release)
 target_link_libraries(bumblebot PRIVATE onnxruntime)

@@ -58,7 +58,7 @@ public:
         numThreads = n;
     }
 
-    void setHashSizeMb(unsigned mb){}
+    unsigned benchPosition(Position& position, unsigned iterations);
 
     SearchProfile profile() const;
 
@@ -78,6 +78,10 @@ private:
     };
 
     float expand(Position& position, Node& node);
+
+    void runIteration(Position const& rootPosition,
+                      Node& root,
+                      std::vector<Edge*>& path);
 
     void worker(Position const& rootPosition,
                 Node& root,

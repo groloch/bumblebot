@@ -14,7 +14,10 @@ namespace nn {
 
 namespace {
 
-constexpr char MODEL_PATH[] = "model.onnx";
+# ifndef EVALFILE
+#   define EVALFILE "model.onnx"
+# endif
+constexpr char MODEL_PATH[] = EVALFILE;
 
 constexpr int64_t TOKENS_LEN = 70;
 constexpr int64_t POLICY_LEN = 4288;
@@ -29,6 +32,52 @@ Ort::SessionOptions makeSessionOptions(){
     return opts;
 }
 
+}
+
+
+bool NNCache::lookup(Hash key, ModelOutput& out) const {
+    std::lock_guard<std::mutex> lk{mutex_};
+    auto it = map_.find(key);
+    if(it == map_.end()) return false;
+    out = it->second;
+    return true;
+}
+
+
+void NNCache::insert(Hash key, ModelOutput const& value){
+    std::lock_guard<std::mutex> lk{mutex_};
+    if(capacity_ == 0) return;
+    if(!map_.emplace(key, value).second) return;
+    order_.push_back(key);
+    while(map_.size() > capacity_){
+        const Hash oldest{order_.front()};
+        order_.pop_front();
+        map_.erase(oldest);
+    }
+}
+
+
+void NNCache::setCapacity(std::size_t entries){
+    std::lock_guard<std::mutex> lk{mutex_};
+    capacity_ = entries;
+    while(map_.size() > capacity_){
+        const Hash oldest{order_.front()};
+        order_.pop_front();
+        map_.erase(oldest);
+    }
+}
+
+
+void NNCache::clear(){
+    std::lock_guard<std::mutex> lk{mutex_};
+    map_.clear();
+    order_.clear();
+}
+
+
+std::size_t NNCache::size() const {
+    std::lock_guard<std::mutex> lk{mutex_};
+    return map_.size();
 }
 
 
@@ -58,7 +107,24 @@ void Evaluator::setMaxWaitUs(unsigned us){
 }
 
 
+void Evaluator::setCacheSizeMb(unsigned mb){
+    cache_.setCapacity(NNCache::entriesForMb(mb));
+}
+
+
+void Evaluator::clearCache(){
+    cache_.clear();
+}
+
+
 std::shared_future<ModelOutput> Evaluator::submit(Hash key, ModelInput input){
+    ModelOutput cached;
+    if(cache_.lookup(key, cached)){
+        auto promise = std::make_shared<std::promise<ModelOutput>>();
+        promise->set_value(std::move(cached));
+        return promise->get_future().share();
+    }
+
     std::unique_lock<std::mutex> lk{mu_};
     auto it = inflight_.find(key);
     if(it != inflight_.end()){
@@ -140,6 +206,7 @@ void Evaluator::run(){
         std::vector<ModelOutput> outs{evaluate_batch(inputs.data(), inputs.size())};
 
         for(std::size_t i{0}; i < batch.size(); ++i){
+            cache_.insert(batch[i].key, outs[i]);
             batch[i].promise->set_value(std::move(outs[i]));
         }
     }

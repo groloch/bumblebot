@@ -168,6 +168,78 @@ Search::Result Search::search(Position& position,
 }
 
 
+void Search::runIteration(Position const& rootPosition,
+                          Node& root,
+                          std::vector<Edge*>& path){
+    path.clear();
+    Position scratch{rootPosition};
+    Node* node{&root};
+
+    // Selection
+    const auto tSel0 = clock::now();
+    while(!node->isTerminal && node->expanded.load(std::memory_order_acquire)){
+        Edge* edge{node->selectChild()};
+        if(edge == nullptr) break;
+        edge->child.addVirtualLoss();
+        path.push_back(edge);
+        scratch.applyMove(edge->move);
+        node = &edge->child;
+    }
+    const auto tSel1 = clock::now();
+    counters_.selectNs.fetch_add(elapsedNs(tSel0, tSel1),
+                                 std::memory_order_relaxed);
+
+    const uint32_t depth{static_cast<uint32_t>(path.size())};
+    counters_.cumDepth.fetch_add(depth, std::memory_order_relaxed);
+    atomicMax(counters_.maxDepth, depth);
+
+    // Expansion
+    float value{0.0f};
+    bool doBackprop{true};
+
+    if(node->isTerminal){
+        value = expand(scratch, *node);
+    } else {
+        bool expected{false};
+        const bool claimed{
+            node->expanding.compare_exchange_strong(expected, true,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)
+        };
+        if(claimed){
+            value = expand(scratch, *node);
+        } else {
+            for(Edge* e : path){
+                e->child.removeVirtualLoss();
+            }
+            counters_.expandRaces.fetch_add(1, std::memory_order_relaxed);
+            doBackprop = false;
+        }
+    }
+
+    if(!doBackprop) return;
+
+    // Backpropagation
+    const auto tBp0 = clock::now();
+    Node* current{node};
+    unsigned idx{static_cast<unsigned>(path.size())};
+    while(true){
+        value = 1.0f - value;
+        current->update(value);
+        if(current != &root){
+            current->removeVirtualLoss();
+        }
+        if(idx == 0) break;
+        --idx;
+        current = (idx == 0) ? &root : &path[idx - 1]->child;
+    }
+    const auto tBp1 = clock::now();
+    counters_.backpropNs.fetch_add(elapsedNs(tBp0, tBp1),
+                                   std::memory_order_relaxed);
+    counters_.iterations.fetch_add(1, std::memory_order_relaxed);
+}
+
+
 void Search::worker(Position const& rootPosition,
                     Node& root,
                     std::atomic<bool> const& stop){
@@ -175,73 +247,26 @@ void Search::worker(Position const& rootPosition,
     path.reserve(128);
 
     while(!stop.load(std::memory_order_relaxed)){
-        path.clear();
-        Position scratch{rootPosition};
-        Node* node{&root};
-
-        // Selection
-        const auto tSel0 = clock::now();
-        while(!node->isTerminal && node->expanded.load(std::memory_order_acquire)){
-            Edge* edge{node->selectChild()};
-            if(edge == nullptr) break;
-            edge->child.addVirtualLoss();
-            path.push_back(edge);
-            scratch.applyMove(edge->move);
-            node = &edge->child;
-        }
-        const auto tSel1 = clock::now();
-        counters_.selectNs.fetch_add(elapsedNs(tSel0, tSel1),
-                                     std::memory_order_relaxed);
-
-        const uint32_t depth{static_cast<uint32_t>(path.size())};
-        counters_.cumDepth.fetch_add(depth, std::memory_order_relaxed);
-        atomicMax(counters_.maxDepth, depth);
-
-        // Expansion
-        float value{0.0f};
-        bool doBackprop{true};
-
-        if(node->isTerminal){
-            value = expand(scratch, *node);
-        } else {
-            bool expected{false};
-            const bool claimed{
-                node->expanding.compare_exchange_strong(expected, true,
-                    std::memory_order_acq_rel,
-                    std::memory_order_acquire)
-            };
-            if(claimed){
-                value = expand(scratch, *node);
-            } else {
-                for(Edge* e : path){
-                    e->child.removeVirtualLoss();
-                }
-                counters_.expandRaces.fetch_add(1, std::memory_order_relaxed);
-                doBackprop = false;
-            }
-        }
-
-        if(!doBackprop) continue;
-
-        // Backpropagation
-        const auto tBp0 = clock::now();
-        Node* current{node};
-        unsigned idx{static_cast<unsigned>(path.size())};
-        while(true){
-            value = 1.0f - value;
-            current->update(value);
-            if(current != &root){
-                current->removeVirtualLoss();
-            }
-            if(idx == 0) break;
-            --idx;
-            current = (idx == 0) ? &root : &path[idx - 1]->child;
-        }
-        const auto tBp1 = clock::now();
-        counters_.backpropNs.fetch_add(elapsedNs(tBp0, tBp1),
-                                       std::memory_order_relaxed);
-        counters_.iterations.fetch_add(1, std::memory_order_relaxed);
+        runIteration(rootPosition, root, path);
     }
+}
+
+
+unsigned Search::benchPosition(Position& position, unsigned iterations){
+    counters_.reset();
+
+    Node root{0.0f};
+    expand(position, root);
+
+    if(!root.children.empty()){
+        std::vector<Edge*> path;
+        path.reserve(128);
+        for(unsigned i{0}; i < iterations; ++i){
+            runIteration(position, root, path);
+        }
+    }
+
+    return root.visitCount.load(std::memory_order_relaxed);
 }
 
 

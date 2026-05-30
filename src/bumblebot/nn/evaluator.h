@@ -6,6 +6,7 @@
 # include <condition_variable>
 # include <cstddef>
 # include <cstdint>
+# include <deque>
 # include <future>
 # include <memory>
 # include <mutex>
@@ -27,6 +28,26 @@ struct ModelOutput {
 };
 
 
+class NNCache {
+public:
+    bool lookup(Hash key, ModelOutput& out) const;
+    void insert(Hash key, ModelOutput const& value);
+    void setCapacity(std::size_t entries);
+    void clear();
+    std::size_t size() const;
+
+    static constexpr std::size_t entriesForMb(unsigned mb){
+        return (static_cast<std::size_t>(mb) * 1024u * 1024u) / sizeof(ModelOutput);
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::size_t capacity_{0};
+    std::unordered_map<Hash, ModelOutput> map_;
+    std::deque<Hash> order_;
+};
+
+
 class Evaluator {
 public:
     static Evaluator& instance();
@@ -38,6 +59,8 @@ public:
 
     void setBatchSize(unsigned n);
     void setMaxWaitUs(unsigned us);
+    void setCacheSizeMb(unsigned mb);
+    void clearCache();
 
     unsigned batchSize() const { return batchSize_.load(std::memory_order_relaxed); }
     unsigned maxWaitUs() const { return maxWaitUs_.load(std::memory_order_relaxed); }
@@ -65,6 +88,7 @@ private:
     std::condition_variable cv_;
     std::vector<Request> queue_;
     std::unordered_map<Hash, std::shared_future<ModelOutput>> inflight_;
+    NNCache cache_;
 
     std::atomic<unsigned> batchSize_{32};
     std::atomic<unsigned> maxWaitUs_{200};

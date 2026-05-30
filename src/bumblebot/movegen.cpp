@@ -279,44 +279,41 @@ void generateKingMoves(Ctx const& ctx, Bitboard kings){
         ctx.list.append(m);
     }
 
-    Bitboard kingsideLookup, queensideLookup;
-    Square kingsideTo, queensideTo;
-    if constexpr(C == Color::White){
-        kingsideLookup = bitboards::bb_f1 | bitboards::bb_g1;
-        queensideLookup = bitboards::bb_b1 | bitboards::bb_c1 | bitboards::bb_d1;
-        kingsideTo = squares::g1;
-        queensideTo = squares::c1;
-    } else {
-        kingsideLookup = bitboards::bb_f8 | bitboards::bb_g8;
-        queensideLookup = bitboards::bb_b8 | bitboards::bb_c8 | bitboards::bb_d8;
-        kingsideTo = squares::g8;
-        queensideTo = squares::c8;
-    }
+    constexpr Rank backRank{(C == Color::White) ? ranks::r1 : ranks::r8};
+    auto rankSeg = [](File lo, File hi) -> Bitboard {
+        return ((1ULL << (hi - lo + 1u)) - 1u) << (backRank * 8u + lo);
+    };
+    const File kingFromFile{file_of(from)};
 
-    if(ctx.pos.canCastle(C, CastleDirection::Kingside)
-       && !(ctx.occ & kingsideLookup)){
-        bool ok{true};
+    auto tryCastle = [&](CastleDirection dir){
+        if(!ctx.pos.canCastle(C, dir)) return;
+        const Square rookFrom{ctx.pos.castleRookSquare(C, dir)};
+        const File rookFromFile{file_of(rookFrom)};
+        const File kingToFile{(dir == CastleDirection::Kingside) ? 6u : 2u};
+        const File rookToFile{(dir == CastleDirection::Kingside) ? 5u : 3u};
+        const Square kingTo{square_of(kingToFile, backRank)};
+
+        const File kpLo{(kingFromFile < kingToFile) ? kingFromFile : kingToFile};
+        const File kpHi{(kingFromFile < kingToFile) ? kingToFile : kingFromFile};
+        const File rpLo{(rookFromFile < rookToFile) ? rookFromFile : rookToFile};
+        const File rpHi{(rookFromFile < rookToFile) ? rookToFile : rookFromFile};
+
+        const Bitboard kingPath{rankSeg(kpLo, kpHi)};
+        const Bitboard rookPath{rankSeg(rpLo, rpHi)};
+        const Bitboard emptyNeeded{
+            (kingPath | rookPath) & ~(bitboard_of(from) | bitboard_of(rookFrom))
+        };
+        if(ctx.occ & emptyNeeded) return;
+
         if constexpr(CheckLegal){
-            Bitboard through{bitboard_of(from) | bitboard_of(from + 1u) | bitboard_of(from + 2u)};
-            ok = (through & ctx.opponentAttacks) == 0;
+            if(kingPath & ctx.opponentAttacks) return;
         }
-        if(ok){
-            Move m{from, kingsideTo, false, true, false, false, false};
-            ctx.list.append(m);
-        }
-    }
-    if(ctx.pos.canCastle(C, CastleDirection::Queenside)
-       && !(ctx.occ & queensideLookup)){
-        bool ok{true};
-        if constexpr(CheckLegal){
-            Bitboard through{bitboard_of(from) | bitboard_of(from - 1u) | bitboard_of(from - 2u)};
-            ok = (through & ctx.opponentAttacks) == 0;
-        }
-        if(ok){
-            Move m{from, queensideTo, false, true, false, false, false};
-            ctx.list.append(m);
-        }
-    }
+        Move m{from, kingTo, false, true, false, false, false};
+        ctx.list.append(m);
+    };
+
+    tryCastle(CastleDirection::Kingside);
+    tryCastle(CastleDirection::Queenside);
 }
 
 

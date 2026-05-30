@@ -64,12 +64,21 @@ bool applyUciMove(Position& position, std::string const& uci){
     const Square from{static_cast<Square>((uci[0] - 'a') + 8 * (uci[1] - '1'))};
     const Square to{static_cast<Square>((uci[2] - 'a') + 8 * (uci[3] - '1'))};
     const PieceType promo{(uci.size() >= 5) ? promoFromChar(uci[4]) : PieceType::None};
+    const Color stm{position.turn()};
 
     MoveList legal{};
     movegen::generateLegalAll(position, legal);
     for(unsigned i{0}; i < legal.size; ++i){
         Move m{legal.moves[i]};
-        if(m.from() != from || m.to() != to) continue;
+        if(m.from() != from) continue;
+        bool toMatches{m.to() == to};
+        if(!toMatches && m.isCastle()){
+            const CastleDirection dir{
+                (file_of(m.to()) == 6) ? CastleDirection::Kingside : CastleDirection::Queenside
+            };
+            if(position.castleRookSquare(stm, dir) == to) toMatches = true;
+        }
+        if(!toMatches) continue;
         if(m.isPromotion()){
             if(m.promotionPieceType() == promo){
                 position.applyMove(m);
@@ -122,9 +131,17 @@ void handlePosition(std::istringstream& ss, Position& position){
 }
 
 
-std::string uciOf(Move const& m){
+std::string uciOf(Move const& m, Position const& pos, bool chess960){
+    Square to{m.to()};
+    if(chess960 && m.isCastle()){
+        const CastleDirection dir{
+            (file_of(to) == 6) ? CastleDirection::Kingside : CastleDirection::Queenside
+        };
+        const Color c{(rank_of(m.from()) == 0) ? Color::White : Color::Black};
+        to = pos.castleRookSquare(c, dir);
+    }
     return moveUci(
-        m.from(), m.to(),
+        m.from(), to,
         m.isPromotion() ? m.promotionPieceType() : PieceType::None
     );
 }
@@ -246,9 +263,10 @@ void runBenchNn(std::ostream& os){
 void spawnSearch(Position& position, Search& search,
                  const SearchLimits& limits,
                  std::atomic<bool>& stopFlag, std::thread& worker,
-                 std::mutex& coutMutex){
+                 std::mutex& coutMutex,
+                 bool chess960){
     stopFlag.store(false, std::memory_order_relaxed);
-    worker = std::thread([&, limits]{
+    worker = std::thread([&, limits, chess960]{
         auto onInfo = [&](const SearchStats& s, const std::vector<Move>& pv){
             std::lock_guard<std::mutex> lk{coutMutex};
             std::cout << "info"
@@ -260,7 +278,7 @@ void spawnSearch(Position& position, Search& search,
                       << " score cp " << qToCp(s.rootQ);
             if(!pv.empty()){
                 std::cout << " pv";
-                for(const Move& m : pv) std::cout << ' ' << uciOf(m);
+                for(const Move& m : pv) std::cout << ' ' << uciOf(m, position, chess960);
             }
             std::cout << std::endl;
         };
@@ -271,9 +289,9 @@ void spawnSearch(Position& position, Search& search,
         #ifndef NDEBUG
         printProfile(std::cout, search.profile());
         #endif
-        std::cout << "bestmove " << (r.best.bits ? uciOf(r.best) : std::string{"0000"});
+        std::cout << "bestmove " << (r.best.bits ? uciOf(r.best, position, chess960) : std::string{"0000"});
         if(r.ponder.bits){
-            std::cout << " ponder " << uciOf(r.ponder);
+            std::cout << " ponder " << uciOf(r.ponder, position, chess960);
         }
         std::cout << std::endl;
     });
@@ -284,7 +302,8 @@ void handleSetOption(std::istringstream& ss,
                      Search& search,
                      unsigned& hashSizeMb,
                      unsigned& numThreads,
-                     unsigned& batchSize){
+                     unsigned& batchSize,
+                     bool& chess960){
     std::string token;
     if(!(ss >> token) || token != "name") return;
 
@@ -308,7 +327,7 @@ void handleSetOption(std::istringstream& ss,
             if(mb < static_cast<long long>(kHashMinMb)) mb = kHashMinMb;
             if(mb > static_cast<long long>(kHashMaxMb)) mb = kHashMaxMb;
             hashSizeMb = static_cast<unsigned>(mb);
-            search.setHashSizeMb(hashSizeMb);
+            nn::Evaluator::instance().setCacheSizeMb(hashSizeMb);
         } catch(...){}
     } else if(nameLower == "threads"){
         try{
@@ -326,13 +345,17 @@ void handleSetOption(std::istringstream& ss,
             batchSize = static_cast<unsigned>(n);
             nn::Evaluator::instance().setBatchSize(batchSize);
         } catch(...){}
+    } else if(nameLower == "uci_chess960"){
+        const std::string v{toLower(value)};
+        chess960 = (v == "true" || v == "1" || v == "on");
     }
 }
 
 
 void handleGo(std::istringstream& ss, Position& position, Search& search,
               std::atomic<bool>& stopFlag, std::thread& worker,
-              std::mutex& coutMutex){
+              std::mutex& coutMutex,
+              bool chess960){
     auto savedPos = ss.tellg();
     std::string first;
     if(ss >> first && first == "perft"){
@@ -348,7 +371,7 @@ void handleGo(std::istringstream& ss, Position& position, Search& search,
     ss.seekg(savedPos);
 
     SearchLimits limits{parseGoLimits(ss)};
-    spawnSearch(position, search, limits, stopFlag, worker, coutMutex);
+    spawnSearch(position, search, limits, stopFlag, worker, coutMutex, chess960);
 }
 
 }
@@ -364,7 +387,8 @@ void run_uci(){
     unsigned hashSizeMb{kHashDefaultMb};
     unsigned numThreads{1};
     unsigned batchSize{kBatchSizeDefault};
-    search.setHashSizeMb(hashSizeMb);
+    bool chess960{false};
+    nn::Evaluator::instance().setCacheSizeMb(hashSizeMb);
     search.setNumThreads(numThreads);
     nn::Evaluator::instance().setBatchSize(batchSize);
 
@@ -384,22 +408,24 @@ void run_uci(){
                       << kThreadsMax << std::endl;
             std::cout << "option name BatchSize type spin default " << kBatchSizeDefault
                       << " min " << kBatchSizeMin << " max " << kBatchSizeMax << std::endl;
+            std::cout << "option name UCI_Chess960 type check default false" << std::endl;
             std::cout << "uciok" << std::endl;
         } else if(command == "isready"){
             std::lock_guard<std::mutex> lk{coutMutex};
             std::cout << "readyok" << std::endl;
         } else if(command == "setoption"){
             stopAndJoin(stopFlag, worker);
-            handleSetOption(ss, search, hashSizeMb, numThreads, batchSize);
+            handleSetOption(ss, search, hashSizeMb, numThreads, batchSize, chess960);
         } else if(command == "ucinewgame"){
             stopAndJoin(stopFlag, worker);
+            nn::Evaluator::instance().clearCache();
             position = Position{};
         } else if(command == "position"){
             stopAndJoin(stopFlag, worker);
             handlePosition(ss, position);
         } else if(command == "go"){
             stopAndJoin(stopFlag, worker);
-            handleGo(ss, position, search, stopFlag, worker, coutMutex);
+            handleGo(ss, position, search, stopFlag, worker, coutMutex, chess960);
         } else if(command == "stop"){
             stopAndJoin(stopFlag, worker);
         } else if(command == "perft"){

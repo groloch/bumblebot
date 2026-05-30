@@ -80,6 +80,8 @@ public:
 
     bool canCastle(Color color, CastleDirection direction) const;
 
+    Square castleRookSquare(Color color, CastleDirection direction) const;
+
     bool isLegal(Move const& move) const;
 
     bool inCheck() const;
@@ -108,6 +110,10 @@ private:
     Bitboard opponentAttacks, checkers;
 
     PositionData positionData;
+
+    // castleRookSq[colorIdx][sideIdx]: rook start square for castling.
+    // colorIdx: 0 = White, 1 = Black. sideIdx: 0 = Kingside, 1 = Queenside.
+    std::array<std::array<Square, 2>, 2> castleRookSq;
 
     Bitboard& pieceBb(Color color, PieceType pieceType);
 

@@ -24,6 +24,8 @@ struct PerftTest{
     int depth;
     u64 expectedNodes;
 };
+
+const std::vector<PerftTest>& testPositions();
 }
 
 perft::PerftResult run_perft(Position& position, int depth);
