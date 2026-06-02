@@ -13,4 +13,4 @@ cd build && ./bumblebot
 ```
 
 This currently requires a compatible AMD GPU and a onnx model file to be placed in the same directory as the executable. The model file is not included in this repository, but can be found on huggingface:
-https://huggingface.co/groloch/bumblebot_100m.
+https://huggingface.co/groloch/bumblebot_v0_100m.
